@@ -23,11 +23,27 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
-    - name: Verify Secrets
+    - name: Install acme.sh
+      run: curl https://get.acme.sh | sh -s email=${{ secrets.LE_EMAIL }}
+
+    - name: Generate Trusted Certificate (Let's Encrypt via Loopia)
+      id: cert_gen
       run: |
-        if [ -z "${{ secrets.PFX_BASE64 }}" ]; then echo "Error: PFX_BASE64 secret is missing"; exit 1; fi
-        if [ -z "${{ secrets.PFX_PASSWORD }}" ]; then echo "Error: PFX_PASSWORD secret is missing"; exit 1; fi
-        if [ -z "${{ vars.CUSTOM_DOMAIN_NAME }}" ]; then echo "Error: CUSTOM_DOMAIN_NAME variable is missing"; exit 1; fi
+        export LOOPIA_User="${{ secrets.LOOPIA_USER }}"
+        export LOOPIA_Password="${{ secrets.LOOPIA_PASSWORD }}"
+        
+        # Issue certificate using DNS challenge
+        ~/.acme.sh/acme.sh --issue --dns dns_loopia -d "${{ vars.CUSTOM_DOMAIN_NAME }}"
+        
+        # Export to PFX
+        PFX_PASS="temporary-password"
+        ~/.acme.sh/acme.sh --to-pkcs12 --pkcs12-password "$PFX_PASS" -d "${{ vars.CUSTOM_DOMAIN_NAME }}"
+        
+        # Encode to Base64 for Terraform
+        PFX_B64=$(cat ~/.acme.sh/${{ vars.CUSTOM_DOMAIN_NAME }}_ecc/${{ vars.CUSTOM_DOMAIN_NAME }}.p12 | base64 -w 0)
+        echo "::add-mask::$PFX_B64"
+        echo "pfx_data=$PFX_B64" >> $GITHUB_OUTPUT
+        echo "pfx_pass=$PFX_PASS" >> $GITHUB_OUTPUT
 
     - name: Azure Login
       uses: azure/login@v1
@@ -46,8 +62,8 @@ jobs:
       run: terraform plan -no-color -input=false
       env:
         TF_VAR_custom_domain_name: ${{ vars.CUSTOM_DOMAIN_NAME }}
-        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
-        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
+        TF_VAR_pfx_base64: ${{ steps.cert_gen.outputs.pfx_data }}
+        TF_VAR_pfx_password: ${{ steps.cert_gen.outputs.pfx_pass }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -58,8 +74,8 @@ jobs:
       run: terraform apply -auto-approve -input=false
       env:
         TF_VAR_custom_domain_name: ${{ vars.CUSTOM_DOMAIN_NAME }}
-        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
-        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
+        TF_VAR_pfx_base64: ${{ steps.cert_gen.outputs.pfx_data }}
+        TF_VAR_pfx_password: ${{ steps.cert_gen.outputs.pfx_pass }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
