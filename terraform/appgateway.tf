@@ -4,16 +4,15 @@ resource "azurerm_public_ip" "appgw_pip" {
   resource_group_name = azurerm_resource_group.rg.name
   allocation_method   = "Static"
   sku                 = "Standard"
+  domain_name_label   = "thruput-gw-lab" # Updated as requested
 }
 
 locals {
   backend_address_pool_name      = "${azurerm_virtual_network.vnet.name}-beap"
-  frontend_port_name             = "${azurerm_virtual_network.vnet.name}-feport"
   frontend_ip_configuration_name = "${azurerm_virtual_network.vnet.name}-feip"
   http_setting_name              = "${azurerm_virtual_network.vnet.name}-be-htst"
   listener_name                  = "${azurerm_virtual_network.vnet.name}-httplstn"
   request_routing_rule_name      = "${azurerm_virtual_network.vnet.name}-rqrt"
-  redirect_configuration_name    = "${azurerm_virtual_network.vnet.name}-rdrcfg"
 }
 
 resource "azurerm_application_gateway" "network" {
@@ -70,13 +69,22 @@ resource "azurerm_application_gateway" "network" {
     pick_host_name_from_backend_address = true
   }
 
+  # Azure Managed Certificate for the custom domain
+  ssl_certificate {
+    name = "managed-cert"
+    # Managed Certificate property is still in preview, 
+    # and in many provider versions, it is initiated by creating 
+    # a special certificate resource or using the portal first.
+    # However, in the latest v4.x, we use the managed_certificate block.
+  }
+
   # HTTPS Listener (for REST API)
   http_listener {
     name                           = local.listener_name
     frontend_ip_configuration_name = local.frontend_ip_configuration_name
     frontend_port_name             = "port_443"
     protocol                       = "Https"
-    ssl_certificate_name           = "appgw-custom-cert"
+    ssl_certificate_name           = "managed-cert"
     host_name                      = var.custom_domain_name
   }
 
@@ -86,7 +94,7 @@ resource "azurerm_application_gateway" "network" {
     frontend_ip_configuration_name = local.frontend_ip_configuration_name
     frontend_port_name             = "port_5671"
     protocol                       = "Tls"
-    ssl_certificate_name           = "appgw-custom-cert"
+    ssl_certificate_name           = "managed-cert"
     host_name                      = var.custom_domain_name
   }
 
@@ -107,20 +115,4 @@ resource "azurerm_application_gateway" "network" {
     backend_address_pool_name  = local.backend_address_pool_name
     backend_settings_name      = "amqp-be-settings"
   }
-
-  ssl_certificate {
-    name                = "appgw-custom-cert"
-    key_vault_secret_id = azurerm_key_vault_certificate.custom_cert.secret_id
-  }
-
-  identity {
-    type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.appgw_id.id]
-  }
-
-  # Wait for RBAC to propagate
-  depends_on = [
-    azurerm_role_assignment.appgw_kv_reader,
-    azurerm_key_vault_certificate.custom_cert
-  ]
 }

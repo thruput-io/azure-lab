@@ -14,15 +14,3 @@ variable "custom_domain_name" {
   description = "The custom domain name for the Application Gateway (e.g., eventhub.example.com)."
   type        = string
 }
-
-variable "pfx_base64" {
-  description = "Base64 encoded PFX certificate."
-  type        = string
-  sensitive   = true
-}
-
-variable "pfx_password" {
-  description = "Password for the PFX certificate."
-  type        = string
-  sensitive   = true
-}
