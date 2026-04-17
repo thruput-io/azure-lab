@@ -16,14 +16,14 @@ terraform {
     }
   }
 
-  # Replace with your storage account details for remote state
-  # backend "azurerm" {
-  #   resource_group_name  = "tfstate-rg"
-  #   storage_account_name = "tfstatestorage"
-  #   container_name       = "tfstate"
-  #   key                  = "eventhub-appgw.tfstate"
-  #   use_oidc             = true
-  # }
+  # Remote state storage in Azure
+  backend "azurerm" {
+    resource_group_name  = "tfstate-rg"
+    storage_account_name = "tfstate1776442465"
+    container_name       = "tfstate"
+    key                  = "eventhub-appgw.tfstate"
+    use_oidc             = true
+  }
 }
 
 provider "azurerm" {
