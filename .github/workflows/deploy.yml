@@ -38,13 +38,9 @@ jobs:
         export LOOPIA_User="${{ secrets.LOOPIA_USER }}"
         export LOOPIA_Password="${{ secrets.LOOPIA_PASSWORD }}"
         
-        # The Loopia plugin in acme.sh sometimes fails to find the root of .se domains.
-        # We can force the root domain by setting the _loopia_domain variable 
-        # which the script uses internally.
-        
-        # Determine the root domain (e.g., thruput.se from eventhub.thruput.se)
-        ROOT_DOMAIN=$(echo "$DOMAIN_NAME" | awk -F. '{print $(NF-1)"."$NF}')
-        echo "Detected Root Domain: $ROOT_DOMAIN"
+        # Surgical fix: Patch acme.sh Loopia script to handle the domain split manually.
+        # We replace the _get_root call with a hardcoded thruput.se
+        sed -i 's/_get_root "$h"/echo "thruput.se"/g' ~/.acme.sh/dnsapi/dns_loopia.sh
         
         ~/.acme.sh/acme.sh --issue --dns dns_loopia \
           -d "$DOMAIN_NAME" \
