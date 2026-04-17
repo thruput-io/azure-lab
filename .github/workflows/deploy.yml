@@ -38,9 +38,13 @@ jobs:
         export LOOPIA_User="${{ secrets.LOOPIA_USER }}"
         export LOOPIA_Password="${{ secrets.LOOPIA_PASSWORD }}"
         
-        # Manually install a specific version of the Loopia DNS script if needed, 
-        # but first let's try to help acme.sh by providing the root domain hint.
-        # We use the --domain flag for the full cert, but acme.sh needs to know thruput.se is the zone.
+        # The Loopia plugin in acme.sh sometimes fails to find the root of .se domains.
+        # We can force the root domain by setting the _loopia_domain variable 
+        # which the script uses internally.
+        
+        # Determine the root domain (e.g., thruput.se from eventhub.thruput.se)
+        ROOT_DOMAIN=$(echo "$DOMAIN_NAME" | awk -F. '{print $(NF-1)"."$NF}')
+        echo "Detected Root Domain: $ROOT_DOMAIN"
         
         ~/.acme.sh/acme.sh --issue --dns dns_loopia \
           -d "$DOMAIN_NAME" \
