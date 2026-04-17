@@ -23,40 +23,16 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v3
 
+    - name: Verify Secrets
+      run: |
+        if [ -z "${{ secrets.PFX_BASE64 }}" ]; then echo "Error: PFX_BASE64 secret is missing"; exit 1; fi
+        if [ -z "${{ secrets.PFX_PASSWORD }}" ]; then echo "Error: PFX_PASSWORD secret is missing"; exit 1; fi
+        if [ -z "${{ vars.CUSTOM_DOMAIN_NAME }}" ] && [ -z "${{ secrets.CUSTOM_DOMAIN_NAME }}" ]; then echo "Error: CUSTOM_DOMAIN_NAME is missing"; exit 1; fi
+
     - name: Set Domain Name
       run: |
         DOMAIN="${{ vars.CUSTOM_DOMAIN_NAME || secrets.CUSTOM_DOMAIN_NAME }}"
-        if [ -z "$DOMAIN" ]; then echo "Error: CUSTOM_DOMAIN_NAME is not set in Secrets or Variables"; exit 1; fi
         echo "DOMAIN_NAME=$DOMAIN" >> $GITHUB_ENV
-
-    - name: Install acme.sh
-      run: curl https://get.acme.sh | sh -s email=${{ secrets.LE_EMAIL }}
-
-    - name: Generate Trusted Certificate (Let's Encrypt via Loopia)
-      id: cert_gen
-      run: |
-        export LOOPIA_User="${{ secrets.LOOPIA_USER }}"
-        export LOOPIA_Password="${{ secrets.LOOPIA_PASSWORD }}"
-        
-        # Surgical fix: Patch acme.sh Loopia script to handle the domain split manually.
-        # We replace the _get_root call with a hardcoded thruput.se
-        sed -i 's/_get_root "$h"/echo "thruput.se"/g' ~/.acme.sh/dnsapi/dns_loopia.sh
-        
-        ~/.acme.sh/acme.sh --issue --dns dns_loopia \
-          -d "$DOMAIN_NAME" \
-          --dnssleep 20 \
-          --debug
-        
-        # Export to PFX
-        PFX_PASS="temporary-password"
-        ~/.acme.sh/acme.sh --to-pkcs12 --pkcs12-password "$PFX_PASS" -d "$DOMAIN_NAME"
-        
-        # Encode to Base64 for Terraform
-        # Note: acme.sh uses the domain name in the folder path
-        PFX_B64=$(cat ~/.acme.sh/${DOMAIN_NAME}_ecc/${DOMAIN_NAME}.p12 | base64 -w 0)
-        echo "::add-mask::$PFX_B64"
-        echo "pfx_data=$PFX_B64" >> $GITHUB_OUTPUT
-        echo "pfx_pass=$PFX_PASS" >> $GITHUB_OUTPUT
 
     - name: Azure Login
       uses: azure/login@v1
@@ -75,8 +51,8 @@ jobs:
       run: terraform plan -no-color -input=false
       env:
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
-        TF_VAR_pfx_base64: ${{ steps.cert_gen.outputs.pfx_data }}
-        TF_VAR_pfx_password: ${{ steps.cert_gen.outputs.pfx_pass }}
+        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
+        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -87,8 +63,8 @@ jobs:
       run: terraform apply -auto-approve -input=false
       env:
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
-        TF_VAR_pfx_base64: ${{ steps.cert_gen.outputs.pfx_data }}
-        TF_VAR_pfx_password: ${{ steps.cert_gen.outputs.pfx_pass }}
+        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
+        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
