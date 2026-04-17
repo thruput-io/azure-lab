@@ -26,6 +26,11 @@ resource "azurerm_application_gateway" "network" {
     capacity = 2
   }
 
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.appgw_id.id]
+  }
+
   gateway_ip_configuration {
     name      = "my-gateway-ip-configuration"
     subnet_id = azurerm_subnet.appgw_subnet.id
@@ -62,17 +67,18 @@ resource "azurerm_application_gateway" "network" {
     pick_host_name_from_backend_address = true
   }
 
-  # L4 Settings (TCP/TLS)
-  backend_settings {
-    name                                = "amqp-be-settings"
-    port                                = 5671
-    protocol                            = "Tls"
-    timeout                             = 60
-    pick_host_name_from_backend_address = true
+  # L4 Backend (TCP/TLS Proxy)
+  backend {
+    name               = "amqp-be-settings"
+    port               = 5671
+    protocol           = "Tls"
+    timeout_in_seconds = 60
+    host_name          = format("%s.servicebus.windows.net", azurerm_eventhub_namespace.evh.name)
   }
 
   ssl_certificate {
-    name = "managed-cert"
+    name                = "managed-cert"
+    key_vault_secret_id = azurerm_key_vault_certificate.custom_cert.secret_id
   }
 
   # L7 Listener (HTTPS)
@@ -109,9 +115,13 @@ resource "azurerm_application_gateway" "network" {
   routing_rule {
     name                      = "amqp-rule"
     priority                  = 110
-    rule_type                 = "Basic"
     listener_name             = "amqp-listener"
     backend_address_pool_name = local.backend_address_pool_name
-    backend_settings_name     = "amqp-be-settings"
+    backend_name              = "amqp-be-settings"
   }
+
+  depends_on = [
+    azurerm_role_assignment.appgw_kv_reader,
+    azurerm_key_vault_certificate.custom_cert
+  ]
 }
