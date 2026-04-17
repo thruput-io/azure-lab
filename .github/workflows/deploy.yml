@@ -38,8 +38,14 @@ jobs:
         export LOOPIA_User="${{ secrets.LOOPIA_USER }}"
         export LOOPIA_Password="${{ secrets.LOOPIA_PASSWORD }}"
         
-        # Issue certificate using DNS challenge with debug enabled
-        ~/.acme.sh/acme.sh --issue --dns dns_loopia -d "$DOMAIN_NAME" --debug
+        # Manually install a specific version of the Loopia DNS script if needed, 
+        # but first let's try to help acme.sh by providing the root domain hint.
+        # We use the --domain flag for the full cert, but acme.sh needs to know thruput.se is the zone.
+        
+        ~/.acme.sh/acme.sh --issue --dns dns_loopia \
+          -d "$DOMAIN_NAME" \
+          --dnssleep 20 \
+          --debug
         
         # Export to PFX
         PFX_PASS="temporary-password"
