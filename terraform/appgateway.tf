@@ -4,7 +4,7 @@ resource "azurerm_public_ip" "appgw_pip" {
   resource_group_name = azurerm_resource_group.rg.name
   allocation_method   = "Static"
   sku                 = "Standard"
-  domain_name_label   = "thruput-gw-lab" # Updated as requested
+  domain_name_label   = "thruput-gw-lab"
 }
 
 locals {
@@ -47,10 +47,11 @@ resource "azurerm_application_gateway" "network" {
   }
 
   backend_address_pool {
-    name = local.backend_address_pool_name
+    name  = local.backend_address_pool_name
     fqdns = [format("%s.servicebus.windows.net", azurerm_eventhub_namespace.evh.name)]
   }
 
+  # L7 Settings (HTTPS)
   backend_http_settings {
     name                                = local.http_setting_name
     cookie_based_affinity               = "Disabled"
@@ -61,7 +62,8 @@ resource "azurerm_application_gateway" "network" {
     pick_host_name_from_backend_address = true
   }
 
-  backend_setting {
+  # L4 Settings (TCP/TLS)
+  backend_settings {
     name                                = "amqp-be-settings"
     port                                = 5671
     protocol                            = "Tls"
@@ -69,16 +71,11 @@ resource "azurerm_application_gateway" "network" {
     pick_host_name_from_backend_address = true
   }
 
-  # Azure Managed Certificate for the custom domain
   ssl_certificate {
     name = "managed-cert"
-    # Managed Certificate property is still in preview, 
-    # and in many provider versions, it is initiated by creating 
-    # a special certificate resource or using the portal first.
-    # However, in the latest v4.x, we use the managed_certificate block.
   }
 
-  # HTTPS Listener (for REST API)
+  # L7 Listener (HTTPS)
   http_listener {
     name                           = local.listener_name
     frontend_ip_configuration_name = local.frontend_ip_configuration_name
@@ -88,16 +85,17 @@ resource "azurerm_application_gateway" "network" {
     host_name                      = var.custom_domain_name
   }
 
-  # AMQP Listener (for Port 5671 - Layer 4 TLS)
-  http_listener {
+  # L4 Listener (TCP/TLS)
+  listener {
     name                           = "amqp-listener"
     frontend_ip_configuration_name = local.frontend_ip_configuration_name
     frontend_port_name             = "port_5671"
     protocol                       = "Tls"
     ssl_certificate_name           = "managed-cert"
-    host_name                      = var.custom_domain_name
+    host_names                     = [var.custom_domain_name]
   }
 
+  # L7 Rule
   request_routing_rule {
     name                       = local.request_routing_rule_name
     priority                   = 100
@@ -107,12 +105,13 @@ resource "azurerm_application_gateway" "network" {
     backend_http_settings_name = local.http_setting_name
   }
 
-  request_routing_rule {
-    name                       = "amqp-rule"
-    priority                   = 110
-    rule_type                  = "Basic"
-    http_listener_name         = "amqp-listener"
-    backend_address_pool_name  = local.backend_address_pool_name
-    backend_settings_name      = "amqp-be-settings"
+  # L4 Rule
+  routing_rule {
+    name                      = "amqp-rule"
+    priority                  = 110
+    rule_type                 = "Basic"
+    listener_name             = "amqp-listener"
+    backend_address_pool_name = local.backend_address_pool_name
+    backend_settings_name     = "amqp-be-settings"
   }
 }
