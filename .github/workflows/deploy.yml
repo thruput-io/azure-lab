@@ -38,8 +38,8 @@ jobs:
         export LOOPIA_User="${{ secrets.LOOPIA_USER }}"
         export LOOPIA_Password="${{ secrets.LOOPIA_PASSWORD }}"
         
-        # Issue certificate using DNS challenge
-        ~/.acme.sh/acme.sh --issue --dns dns_loopia -d "$DOMAIN_NAME"
+        # Issue certificate using DNS challenge with debug enabled
+        ~/.acme.sh/acme.sh --issue --dns dns_loopia -d "$DOMAIN_NAME" --debug
         
         # Export to PFX
         PFX_PASS="temporary-password"
