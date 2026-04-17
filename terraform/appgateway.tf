@@ -46,6 +46,11 @@ resource "azurerm_application_gateway" "network" {
     port = 5671
   }
 
+  frontend_port {
+    name = "port_9093"
+    port = 9093
+  }
+
   frontend_ip_configuration {
     name                 = local.frontend_ip_configuration_name
     public_ip_address_id = azurerm_public_ip.appgw_pip.id
@@ -76,6 +81,14 @@ resource "azurerm_application_gateway" "network" {
     host_name          = format("%s.servicebus.windows.net", azurerm_eventhub_namespace.evh.name)
   }
 
+  backend {
+    name               = "kafka-be-settings"
+    port               = 9093
+    protocol           = "Tls"
+    timeout_in_seconds = 60
+    host_name          = format("%s.servicebus.windows.net", azurerm_eventhub_namespace.evh.name)
+  }
+
   ssl_certificate {
     name                = "managed-cert"
     key_vault_secret_id = azurerm_key_vault_certificate.custom_cert.secret_id
@@ -101,6 +114,15 @@ resource "azurerm_application_gateway" "network" {
     host_names                     = [var.custom_domain_name]
   }
 
+  listener {
+    name                           = "kafka-listener"
+    frontend_ip_configuration_name = local.frontend_ip_configuration_name
+    frontend_port_name             = "port_9093"
+    protocol                       = "Tls"
+    ssl_certificate_name           = "managed-cert"
+    host_names                     = [var.custom_domain_name]
+  }
+
   # L7 Rule
   request_routing_rule {
     name                       = local.request_routing_rule_name
@@ -118,6 +140,14 @@ resource "azurerm_application_gateway" "network" {
     listener_name             = "amqp-listener"
     backend_address_pool_name = local.backend_address_pool_name
     backend_name              = "amqp-be-settings"
+  }
+
+  routing_rule {
+    name                      = "kafka-rule"
+    priority                  = 120
+    listener_name             = "kafka-listener"
+    backend_address_pool_name = local.backend_address_pool_name
+    backend_name              = "kafka-be-settings"
   }
 
   depends_on = [
