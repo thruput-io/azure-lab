@@ -1,6 +1,22 @@
+# --- Grant pipeline SP permission to manage App Registrations ---
+# Application.ReadWrite.OwnedBy (Graph API app role)
+data "azuread_application_published_app_ids" "well_known" {}
+
+data "azuread_service_principal" "msgraph" {
+  client_id = data.azuread_application_published_app_ids.well_known.result["MicrosoftGraph"]
+}
+
+resource "azuread_app_role_assignment" "pipeline_app_rw_owned_by" {
+  app_role_id         = [for r in data.azuread_service_principal.msgraph.app_roles : r.id if r.value == "Application.ReadWrite.OwnedBy"][0]
+  principal_object_id = data.azurerm_client_config.current.object_id
+  resource_object_id  = data.azuread_service_principal.msgraph.object_id
+}
+
 # --- App Registration ---
 resource "azuread_application" "kafka_client" {
   display_name = "app-eventhub-kafka-client"
+
+  depends_on = [azuread_app_role_assignment.pipeline_app_rw_owned_by]
 }
 
 resource "azuread_service_principal" "kafka_client" {
