@@ -1,0 +1,258 @@
+name: 'Confluent Endpoint Check'
+
+on:
+  workflow_dispatch:
+    inputs:
+      custom_domain:
+        description: 'Custom domain name (e.g. eventhub.thruput.se)'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  confluent-check:
+    name: 'Confluent Endpoint Check'
+    runs-on: ubuntu-latest
+    environment: production
+
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_wrapper: false
+
+    - name: Terraform Init
+      run: terraform init
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
+    - name: Resolve Credentials from Terraform + Key Vault
+      id: creds
+      run: |
+        KV_NAME=$(terraform output -raw key_vault_name)
+        CLIENT_ID=$(terraform output kafka_client_id)
+        CLIENT_SECRET=$(az keyvault secret show \
+          --vault-name "$KV_NAME" \
+          --name kafka-client-secret \
+          --query value -o tsv)
+        TENANT_ID="${{ secrets.AZURE_TENANT_ID }}"
+        DOMAIN="${{ inputs.custom_domain }}"
+
+        echo "client_id=$CLIENT_ID"         >> $GITHUB_OUTPUT
+        echo "tenant_id=$TENANT_ID"         >> $GITHUB_OUTPUT
+        echo "domain=$DOMAIN"               >> $GITHUB_OUTPUT
+
+        # Mask the secret so it never appears in logs
+        echo "::add-mask::$CLIENT_SECRET"
+        echo "client_secret=$CLIENT_SECRET" >> $GITHUB_OUTPUT
+      env:
+        TF_VAR_custom_domain_name: ${{ inputs.custom_domain }}
+        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
+        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
+    # ---------------------------------------------------------------
+    # Check 0: TLS certificate valid and trusted
+    # Explicit cert validation before any functional checks
+    # ---------------------------------------------------------------
+    - name: 'Check 0 — TLS certificate valid and trusted'
+      run: |
+        echo "==> Verifying TLS certificate for $DOMAIN ..."
+        CERT_RESULT=$(echo | openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" 2>/dev/null)
+
+        # Check verify return code
+        if ! echo "$CERT_RESULT" | grep -q "Verify return code: 0 (ok)"; then
+          VERIFY_CODE=$(echo "$CERT_RESULT" | grep "Verify return code:" || echo "(not found)")
+          echo "FAIL: TLS certificate verification failed — $VERIFY_CODE"
+          exit 1
+        fi
+
+        # Check hostname matches
+        CERT_CN=$(echo "$CERT_RESULT" | openssl x509 -noout -subject 2>/dev/null | sed 's/.*CN *= *//')
+        echo "Certificate CN: $CERT_CN"
+
+        # Check expiry
+        EXPIRY=$(echo "$CERT_RESULT" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+        echo "Certificate expires: $EXPIRY"
+        EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$EXPIRY" +%s 2>/dev/null)
+        NOW_EPOCH=$(date +%s)
+        DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
+        echo "Days until expiry: $DAYS_LEFT"
+        if [ "$DAYS_LEFT" -lt 7 ]; then
+          echo "FAIL: Certificate expires in $DAYS_LEFT days — renew immediately"
+          exit 1
+        fi
+
+        echo "PASS: TLS certificate is valid, trusted, and expires in $DAYS_LEFT days"
+      env:
+        DOMAIN: ${{ steps.creds.outputs.domain }}
+
+    # ---------------------------------------------------------------
+    # Check 1: Schema Registry reachable (HTTPS/443)
+    # Uses standard Confluent HTTP Basic auth with client_id:secret
+    # ---------------------------------------------------------------
+    - name: 'Check 1 — Schema Registry reachable (HTTPS :443)'
+      run: |
+        echo "==> Checking Schema Registry at https://$DOMAIN/subjects ..."
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          -u "$CLIENT_ID:$CLIENT_SECRET" \
+          "https://$DOMAIN/subjects")
+
+        echo "HTTP status: $HTTP_STATUS"
+        if [ "$HTTP_STATUS" != "200" ]; then
+          echo "FAIL: Schema Registry returned $HTTP_STATUS (expected 200)"
+          exit 1
+        fi
+        echo "PASS: Schema Registry is reachable"
+      env:
+        DOMAIN: ${{ steps.creds.outputs.domain }}
+        CLIENT_ID: ${{ steps.creds.outputs.client_id }}
+        CLIENT_SECRET: ${{ steps.creds.outputs.client_secret }}
+
+    # ---------------------------------------------------------------
+    # Check 2: Schema subject exists (TopicNameStrategy)
+    # ---------------------------------------------------------------
+    - name: 'Check 2 — Avro schema subject exists (TopicNameStrategy)'
+      run: |
+        SUBJECT="orders.placed-value"
+        echo "==> Checking schema subject $SUBJECT ..."
+        HTTP_STATUS=$(curl -s -o /tmp/sr_response.json -w "%{http_code}" \
+          -u "$CLIENT_ID:$CLIENT_SECRET" \
+          "https://$DOMAIN/subjects/$SUBJECT/versions/latest")
+
+        echo "HTTP status: $HTTP_STATUS"
+        cat /tmp/sr_response.json
+        if [ "$HTTP_STATUS" != "200" ]; then
+          echo "FAIL: Schema subject not found (status $HTTP_STATUS)"
+          exit 1
+        fi
+        echo "PASS: Schema subject $SUBJECT exists"
+      env:
+        DOMAIN: ${{ steps.creds.outputs.domain }}
+        CLIENT_ID: ${{ steps.creds.outputs.client_id }}
+        CLIENT_SECRET: ${{ steps.creds.outputs.client_secret }}
+
+    # ---------------------------------------------------------------
+    # Check 3: Kafka broker reachable on port 9093 (TCP)
+    # Simple connectivity check before attempting full produce/consume
+    # ---------------------------------------------------------------
+    - name: 'Check 3 — Kafka broker TCP reachable (:9093)'
+      run: |
+        echo "==> Checking TCP connectivity to $DOMAIN:9093 ..."
+        if ! timeout 10 bash -c "echo > /dev/tcp/$DOMAIN/9093" 2>/dev/null; then
+          echo "FAIL: Cannot reach $DOMAIN:9093 — check DNS and App Gateway firewall"
+          exit 1
+        fi
+        echo "PASS: $DOMAIN:9093 is reachable"
+      env:
+        DOMAIN: ${{ steps.creds.outputs.domain }}
+
+    # ---------------------------------------------------------------
+    # Check 4: Full Confluent produce + consume using standard settings
+    # Uses confluentinc/cp-schema-registry image with jaas.properties
+    # mounted — exactly as a Confluent client (e.g. Pega) would connect
+    # ---------------------------------------------------------------
+    - name: 'Check 4 — Produce + Consume Avro message (Confluent standard)'
+      run: |
+        TOPIC="orders.placed"
+        IMAGE="confluentinc/cp-schema-registry:7.6.0"
+        PROPS_FILE="/tmp/client.properties"
+
+        # Write client.properties with standard Confluent settings
+        printf '%s\n' \
+          "bootstrap.servers=${DOMAIN}:9093" \
+          "security.protocol=SASL_SSL" \
+          "sasl.mechanism=OAUTHBEARER" \
+          "sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler" \
+          "sasl.oauthbearer.token.endpoint.url=https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token" \
+          "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"${CLIENT_ID}\" clientSecret=\"${CLIENT_SECRET}\" scope=\"https://eventhubs.azure.net/.default\";" \
+          "schema.registry.url=https://${DOMAIN}" \
+          "basic.auth.credentials.source=USER_INFO" \
+          "schema.registry.basic.auth.user.info=${CLIENT_ID}:${CLIENT_SECRET}" \
+          "value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer" \
+          "value.deserializer=io.confluent.kafka.serializers.KafkaAvroDeserializer" \
+          "specific.avro.reader=true" \
+          > "$PROPS_FILE"
+
+        echo "==> Pulling Confluent image $IMAGE ..."
+        docker pull "$IMAGE"
+
+        # Capture timestamp on the host so we can verify it after consume
+        EXPECTED_TS=$(date +%s%3N)
+        echo "==> Producing one Avro message to topic $TOPIC (timestamp=$EXPECTED_TS) ..."
+        docker run --rm \
+          -v "$PROPS_FILE:/etc/kafka/client.properties:ro" \
+          -e TOPIC="$TOPIC" \
+          -e EXPECTED_TS="$EXPECTED_TS" \
+          "$IMAGE" \
+          bash -c '
+            echo "{\"order_id\":\"check-$EXPECTED_TS\",\"product\":\"endpoint-check\",\"quantity\":1,\"timestamp\":$EXPECTED_TS}" | \
+            kafka-avro-console-producer \
+              --broker-list "$(grep "^bootstrap.servers" /etc/kafka/client.properties | cut -d= -f2-)" \
+              --topic "$TOPIC" \
+              --producer.config /etc/kafka/client.properties
+          '
+
+        echo "==> Consuming the Avro message from topic $TOPIC (expecting timestamp=$EXPECTED_TS) ..."
+        CONSUMED=$(docker run --rm \
+          -v "$PROPS_FILE:/etc/kafka/client.properties:ro" \
+          -e TOPIC="$TOPIC" \
+          "$IMAGE" \
+          bash -c '
+            kafka-avro-console-consumer \
+              --bootstrap-server "$(grep "^bootstrap.servers" /etc/kafka/client.properties | cut -d= -f2-)" \
+              --topic "$TOPIC" \
+              --max-messages 1 \
+              --timeout-ms 30000 \
+              --consumer.config /etc/kafka/client.properties
+          ' 2>/dev/null)
+
+        echo "Consumed: $CONSUMED"
+        if echo "$CONSUMED" | grep -q "\"timestamp\":$EXPECTED_TS"; then
+          echo "PASS: Consumed message matches expected timestamp $EXPECTED_TS"
+        else
+          echo "FAIL: Consumed message does not contain expected timestamp $EXPECTED_TS"
+          exit 1
+        fi
+
+        echo "PASS: Produce + Consume completed successfully"
+      env:
+        DOMAIN: ${{ steps.creds.outputs.domain }}
+        TENANT_ID: ${{ steps.creds.outputs.tenant_id }}
+        CLIENT_ID: ${{ steps.creds.outputs.client_id }}
+        CLIENT_SECRET: ${{ steps.creds.outputs.client_secret }}
+
+    - name: Summary
+      if: always()
+      run: |
+        echo "### Confluent Endpoint Check Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Check | Endpoint |" >> $GITHUB_STEP_SUMMARY
+        echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+        echo "| Schema Registry (HTTPS) | https://${{ inputs.custom_domain }}/subjects |" >> $GITHUB_STEP_SUMMARY
+        echo "| Schema subject | \`orders.placed-value\` (TopicNameStrategy) |" >> $GITHUB_STEP_SUMMARY
+        echo "| Kafka broker (TCP) | \`${{ inputs.custom_domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| Produce + Consume (Avro) | topic \`orders.placed\` via Confluent \`cp-schema-registry:7.6.0\` |" >> $GITHUB_STEP_SUMMARY
