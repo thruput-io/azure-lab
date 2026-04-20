@@ -1,10 +1,6 @@
-name: 'Terraform Deploy'
+name: 'Download client.properties'
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
@@ -12,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  terraform:
-    name: 'Terraform'
+  download:
+    name: 'Download client.properties from Key Vault'
     runs-on: ubuntu-latest
     environment: production
 
@@ -24,17 +20,6 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
-
-    - name: Verify Secrets
-      run: |
-        if [ -z "${{ secrets.PFX_BASE64 }}" ]; then echo "Error: PFX_BASE64 secret is missing"; exit 1; fi
-        if [ -z "${{ secrets.PFX_PASSWORD }}" ]; then echo "Error: PFX_PASSWORD secret is missing"; exit 1; fi
-        if [ -z "${{ vars.CUSTOM_DOMAIN_NAME }}" ] && [ -z "${{ secrets.CUSTOM_DOMAIN_NAME }}" ]; then echo "Error: CUSTOM_DOMAIN_NAME is missing"; exit 1; fi
-
-    - name: Set Domain Name
-      run: |
-        DOMAIN="${{ vars.CUSTOM_DOMAIN_NAME || secrets.CUSTOM_DOMAIN_NAME }}"
-        echo "DOMAIN_NAME=$DOMAIN" >> $GITHUB_ENV
 
     - name: Azure Login
       uses: azure/login@v3
@@ -50,11 +35,22 @@ jobs:
 
     - name: Terraform Init
       run: terraform init
-
-    - name: Terraform Plan
-      run: terraform plan -no-color -input=false
       env:
-        TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
+    - name: Download client.properties from Key Vault
+      run: |
+        KV_NAME=$(terraform output -raw key_vault_name)
+        az keyvault secret show \
+          --vault-name "$KV_NAME" \
+          --name kafka-client-properties \
+          --query value -o tsv > ../client.properties
+        echo "client.properties downloaded successfully"
+      env:
+        TF_VAR_custom_domain_name: "placeholder"
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -62,14 +58,9 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
-    - name: Terraform Apply
-      if: github.ref == 'refs/heads/main'
-      run: terraform apply -auto-approve -input=false
-      env:
-        TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
-        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
-        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
-        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        ARM_USE_OIDC: true
+    - name: Upload client.properties as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: client-properties
+        path: client.properties
+        retention-days: 10
