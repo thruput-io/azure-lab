@@ -125,7 +125,7 @@ jobs:
     # ---------------------------------------------------------------
     - name: 'Check 1 — Schema Registry reachable (HTTPS :443)'
       run: |
-        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r')
+        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         if [ -z "$USER_INFO" ]; then
           echo "FAIL: Missing schema.registry.basic.auth.user.info in client.properties"
           exit 1
@@ -151,7 +151,7 @@ jobs:
     # ---------------------------------------------------------------
     - name: 'Check 2 — Avro schema subject exists (TopicNameStrategy)'
       run: |
-        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r')
+        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         if [ -z "$USER_INFO" ]; then
           echo "FAIL: Missing schema.registry.basic.auth.user.info in client.properties"
           exit 1
