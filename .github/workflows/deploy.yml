@@ -10,6 +10,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  actions: write
 
 jobs:
   terraform:
@@ -71,3 +72,37 @@ jobs:
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
+
+    - name: Store Key Vault Name as repository variable
+      if: github.ref == 'refs/heads/main'
+      env:
+        TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
+        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
+        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        KV_NAME=$(terraform output -raw key_vault_name)
+        REPO="${{ github.repository }}"
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          -X GET \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          "https://api.github.com/repos/$REPO/actions/variables/KEY_VAULT_NAME")
+        if [ "$STATUS" = "200" ]; then
+          curl -s -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/variables/KEY_VAULT_NAME" \
+            -d "{\"name\":\"KEY_VAULT_NAME\",\"value\":\"$KV_NAME\"}"
+        else
+          curl -s -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/variables" \
+            -d "{\"name\":\"KEY_VAULT_NAME\",\"value\":\"$KV_NAME\"}"
+        fi
+        echo "KEY_VAULT_NAME=$KV_NAME stored as repository variable"
