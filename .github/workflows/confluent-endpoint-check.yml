@@ -52,16 +52,40 @@ jobs:
         fi
 
         KV_NAME=$(terraform output -raw key_vault_name)
-        CLIENT_ID=$(terraform output kafka_client_id)
         CLIENT_SECRET=$(az keyvault secret show \
           --vault-name "$KV_NAME" \
           --name kafka-client-secret \
           --query value -o tsv)
+        CLIENT_PROPS=$(az keyvault secret show \
+          --vault-name "$KV_NAME" \
+          --name kafka-client-properties \
+          --query value -o tsv)
         TENANT_ID="${{ secrets.AZURE_TENANT_ID }}"
+
+        PROPS_FILE="/tmp/client.properties"
+        printf '%s\n' "$CLIENT_PROPS" > "$PROPS_FILE"
+
+        if [ ! -s "$PROPS_FILE" ]; then
+          echo "ERROR: Retrieved kafka-client-properties is empty"
+          exit 1
+        fi
+
+        if ! grep -q '^bootstrap.servers=' "$PROPS_FILE"; then
+          echo "ERROR: client.properties is missing bootstrap.servers"
+          exit 1
+        fi
+
+        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2-)
+        CLIENT_ID=$(echo "$USER_INFO" | cut -d: -f1)
+        if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
+          echo "ERROR: Failed to resolve client credentials"
+          exit 1
+        fi
 
         echo "client_id=$CLIENT_ID"         >> $GITHUB_OUTPUT
         echo "tenant_id=$TENANT_ID"         >> $GITHUB_OUTPUT
         echo "domain=$DOMAIN"               >> $GITHUB_OUTPUT
+        echo "props_file=$PROPS_FILE"       >> $GITHUB_OUTPUT
 
         # Mask the secret so it never appears in logs
         echo "::add-mask::$CLIENT_SECRET"
@@ -180,23 +204,9 @@ jobs:
       run: |
         TOPIC="orders.placed"
         IMAGE="confluentinc/cp-schema-registry:7.6.0"
-        PROPS_FILE="/tmp/client.properties"
+        PROPS_FILE="${{ steps.creds.outputs.props_file }}"
 
-        # Write client.properties with standard Confluent settings
-        printf '%s\n' \
-          "bootstrap.servers=${DOMAIN}:9093" \
-          "security.protocol=SASL_SSL" \
-          "sasl.mechanism=OAUTHBEARER" \
-          "sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler" \
-          "sasl.oauthbearer.token.endpoint.url=https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token" \
-          "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"${CLIENT_ID}\" clientSecret=\"${CLIENT_SECRET}\" scope=\"https://eventhubs.azure.net/.default\";" \
-          "schema.registry.url=https://${DOMAIN}" \
-          "basic.auth.credentials.source=USER_INFO" \
-          "schema.registry.basic.auth.user.info=${CLIENT_ID}:${CLIENT_SECRET}" \
-          "value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer" \
-          "value.deserializer=io.confluent.kafka.serializers.KafkaAvroDeserializer" \
-          "specific.avro.reader=true" \
-          > "$PROPS_FILE"
+        echo "==> Using client.properties from Key Vault secret kafka-client-properties"
 
         echo "==> Pulling Confluent image $IMAGE ..."
         docker pull "$IMAGE"
