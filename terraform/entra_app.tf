@@ -48,14 +48,16 @@ resource "azurerm_key_vault_secret" "kafka_client_secret" {
 resource "azurerm_key_vault_secret" "kafka_client_properties" {
   name         = "kafka-client-properties"
   key_vault_id = azurerm_key_vault.kv.id
-  value        = join("\n", [
+  value = join("\n", [
     "bootstrap.servers=${var.custom_domain_name}:9093",
     "security.protocol=SASL_SSL",
-    "sasl.mechanism=PLAIN",
-    "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$ConnectionString\" password=\"${azurerm_eventhub_namespace_authorization_rule.confluent_client.primary_connection_string}\";",
+    "sasl.mechanism=OAUTHBEARER",
+    "sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler",
+    "sasl.oauthbearer.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
+    "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"${azuread_application.kafka_client.client_id}\" clientSecret=\"${azuread_application_password.kafka_client_secret.value}\" scope=\"https://eventhubs.azure.net/.default\";",
     "schema.registry.url=https://${var.custom_domain_name}",
     "basic.auth.credentials.source=USER_INFO",
-    "schema.registry.basic.auth.user.info=$ConnectionString:${azurerm_eventhub_namespace_authorization_rule.confluent_client.primary_connection_string}",
+    "schema.registry.basic.auth.user.info=${azuread_application.kafka_client.client_id}:${azuread_application_password.kafka_client_secret.value}",
     "value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer",
     "value.deserializer=io.confluent.kafka.serializers.KafkaAvroDeserializer",
     "specific.avro.reader=true",
