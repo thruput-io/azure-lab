@@ -6,6 +6,16 @@ resource "azurerm_eventhub_namespace" "evh" {
   capacity            = 1
 }
 
+resource "azurerm_eventhub_namespace_authorization_rule" "confluent_client" {
+  name                = "confluent-client"
+  namespace_name      = azurerm_eventhub_namespace.evh.name
+  resource_group_name = azurerm_resource_group.rg.name
+
+  listen = true
+  send   = true
+  manage = false
+}
+
 resource "azurerm_private_endpoint" "evh_pe" {
   name                = "pe-eventhub"
   location            = azurerm_resource_group.rg.location

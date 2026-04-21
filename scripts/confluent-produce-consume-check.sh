@@ -78,6 +78,8 @@ docker run --rm \
       --property basic.auth.credentials.source=USER_INFO \
       --property schema.registry.basic.auth.user.info="$(grep "^schema.registry.basic.auth.user.info" /etc/kafka/client.properties | cut -d= -f2-)" \
       --property value.schema="$VALUE_SCHEMA" \
+      --property auto.register.schemas=false \
+      --property use.latest.version=true \
       --producer.config /etc/kafka/client.properties
   '
 
