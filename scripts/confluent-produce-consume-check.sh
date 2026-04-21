@@ -56,7 +56,7 @@ if [[ ! -s "$PROPS_FILE" ]]; then
   exit 1
 fi
 
-for key in bootstrap.servers schema.registry.url bearer.auth.issuer.endpoint.url bearer.auth.client.id bearer.auth.client.secret; do
+for key in bootstrap.servers schema.registry.url schema.registry.basic.auth.user.info; do
   if ! grep -q "^${key}=" "$PROPS_FILE"; then
     echo "ERROR: client.properties missing required key: ${key}"
     exit 1
@@ -65,17 +65,10 @@ done
 
 BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 SR_URL=$(grep '^schema.registry.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-ISSUER_URL=$(grep '^bearer.auth.issuer.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-CLIENT_ID=$(grep '^bearer.auth.client.id=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-CLIENT_SECRET=$(grep '^bearer.auth.client.secret=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-SCOPE=$(grep '^bearer.auth.scope=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || echo "https://eventhubs.azure.net/.default")
+SR_USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 
 if [[ -z "$TOPIC" ]]; then
   TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || echo "orders.placed")
-fi
-
-if [[ -z "$SCOPE" ]]; then
-  SCOPE="https://eventhubs.azure.net/.default"
 fi
 
 EXPECTED_TS=$(date +%s%3N)
@@ -89,24 +82,12 @@ echo "==> order_id=${ORDER_ID}"
 # Avro schema for the topic (TopicNameStrategy subject: orders.placed-value)
 AVRO_SCHEMA='{"type":"record","name":"OrderPlaced","namespace":"se.thruput.orders","fields":[{"name":"order_id","type":"string"},{"name":"product","type":"string"},{"name":"quantity","type":"int"},{"name":"timestamp","type":"long"}]}'
 
-echo "==> Getting OAuth token for Schema Registry..."
-TOKEN_RESP=$(curl -sS -X POST "$ISSUER_URL" \
-  -d "grant_type=client_credentials&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&scope=${SCOPE}")
-ACCESS_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.access_token')
-
-if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
-  echo "ERROR: Failed to acquire OAuth token from $ISSUER_URL"
-  echo "$TOKEN_RESP"
-  exit 1
-fi
-echo "Token acquired (length=${#ACCESS_TOKEN})"
-
 echo "==> Registering Avro schema (TopicNameStrategy subject: ${TOPIC}-value)..."
 SUBJECT="${TOPIC}-value"
 REG_STATUS=$(curl -sS -o /tmp/sr_reg_resp.json -w "%{http_code}" \
   -X POST "${SR_URL}/subjects/${SUBJECT}/versions" \
   -H "Content-Type: application/vnd.schemaregistry.v1+json" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+  -u "${SR_USER_INFO}" \
   -d "{\"schema\": $(echo "$AVRO_SCHEMA" | jq -Rs .)}")
 
 echo "Schema registration HTTP status: $REG_STATUS"
@@ -127,12 +108,8 @@ sasl.login.callback.handler.class=$(grep '^sasl.login.callback.handler.class=' "
 sasl.oauthbearer.token.endpoint.url=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 sasl.jaas.config=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)
 schema.registry.url=${SR_URL}
-basic.auth.credentials.source=OAUTHBEARER
-bearer.auth.credentials.source=OAUTHBEARER
-bearer.auth.issuer.endpoint.url=${ISSUER_URL}
-bearer.auth.client.id=${CLIENT_ID}
-bearer.auth.client.secret=${CLIENT_SECRET}
-bearer.auth.scope=${SCOPE}
+basic.auth.credentials.source=USER_INFO
+schema.registry.basic.auth.user.info=${SR_USER_INFO}
 EOF
 
 cp "$PRODUCER_CFG" /tmp/producer.properties

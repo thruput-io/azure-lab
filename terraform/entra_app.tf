@@ -65,15 +65,11 @@ resource "azurerm_key_vault_secret" "kafka_client_properties" {
     "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"${azuread_application.kafka_client.client_id}\" clientSecret=\"${azuread_application_password.kafka_client_secret.value}\" scope=\"https://eventhubs.azure.net/.default\";",
     "",
     "# ============================================================",
-    "# Schema Registry — Azure Event Hubs Confluent-compatible endpoint",
+    "# Schema Registry — self-hosted Confluent SR via App Gateway (port 8081)",
     "# ============================================================",
-    "schema.registry.url=https://${azurerm_eventhub_namespace.evh.name}.servicebus.windows.net",
-    "basic.auth.credentials.source=OAUTHBEARER",
-    "bearer.auth.credentials.source=OAUTHBEARER",
-    "bearer.auth.issuer.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
-    "bearer.auth.client.id=${azuread_application.kafka_client.client_id}",
-    "bearer.auth.client.secret=${azuread_application_password.kafka_client_secret.value}",
-    "bearer.auth.scope=https://eventhubs.azure.net/.default",
+    "schema.registry.url=https://${var.custom_domain_name}:8081",
+    "basic.auth.credentials.source=USER_INFO",
+    "schema.registry.basic.auth.user.info=${azuread_application.kafka_client.client_id}:${azuread_application_password.kafka_client_secret.value}",
     "",
     "# ============================================================",
     "# Confluent-standard Avro serializer/deserializer",
@@ -107,6 +103,6 @@ output "kafka_bootstrap_server" {
 }
 
 output "schema_registry_url" {
-  value       = "https://${azurerm_eventhub_namespace.evh.name}.servicebus.windows.net"
-  description = "Azure Event Hubs Schema Registry URL — Confluent-compatible /subjects endpoint"
+  value       = "https://${var.custom_domain_name}:8081"
+  description = "Self-hosted Confluent Schema Registry URL via App Gateway (port 8081)"
 }

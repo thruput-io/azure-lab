@@ -51,6 +51,11 @@ resource "azurerm_application_gateway" "network" {
     port = 9093
   }
 
+  frontend_port {
+    name = "port_8081"
+    port = 8081
+  }
+
   frontend_ip_configuration {
     name                 = local.frontend_ip_configuration_name
     public_ip_address_id = azurerm_public_ip.appgw_pip.id
@@ -59,6 +64,21 @@ resource "azurerm_application_gateway" "network" {
   backend_address_pool {
     name  = local.backend_address_pool_name
     fqdns = [format("%s.servicebus.windows.net", azurerm_eventhub_namespace.evh.name)]
+  }
+
+  # Backend pool for Confluent Schema Registry ACI
+  backend_address_pool {
+    name         = "sr-beap"
+    ip_addresses = [azurerm_container_group.confluent_sr.ip_address]
+  }
+
+  # HTTP settings for Confluent SR (HTTP within VNet, App GW terminates TLS)
+  backend_http_settings {
+    name                  = "sr-be-htst"
+    cookie_based_affinity = "Disabled"
+    port                  = 8081
+    protocol              = "Http"
+    request_timeout       = 60
   }
 
   # L7 Settings (HTTPS)
@@ -94,6 +114,16 @@ resource "azurerm_application_gateway" "network" {
     key_vault_secret_id = azurerm_key_vault_certificate.custom_cert.secret_id
   }
 
+  # L7 HTTPS Listener for Confluent Schema Registry (port 8081)
+  http_listener {
+    name                           = "sr-listener"
+    frontend_ip_configuration_name = local.frontend_ip_configuration_name
+    frontend_port_name             = "port_8081"
+    protocol                       = "Https"
+    ssl_certificate_name           = "managed-cert"
+    host_name                      = var.custom_domain_name
+  }
+
   # L7 Listener (HTTPS)
   http_listener {
     name                           = local.listener_name
@@ -121,6 +151,16 @@ resource "azurerm_application_gateway" "network" {
     protocol                       = "Tls"
     ssl_certificate_name           = "managed-cert"
     host_names                     = [var.custom_domain_name]
+  }
+
+  # L7 Routing Rule for Confluent Schema Registry
+  request_routing_rule {
+    name                       = "sr-rule"
+    priority                   = 90
+    rule_type                  = "Basic"
+    http_listener_name         = "sr-listener"
+    backend_address_pool_name  = "sr-beap"
+    backend_http_settings_name = "sr-be-htst"
   }
 
   # L7 Rule

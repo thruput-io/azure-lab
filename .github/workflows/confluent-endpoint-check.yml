@@ -119,34 +119,19 @@ jobs:
 
     # ---------------------------------------------------------------
     # Check 1: Schema Registry reachable — Confluent /subjects endpoint
-    # Auth: Entra ID Bearer token (scope=eventhubs.azure.net/.default)
+    # Auth: HTTP Basic (USER_INFO: client_id:client_secret)
     # ---------------------------------------------------------------
     - name: 'Check 1 — Schema Registry reachable (Confluent /subjects endpoint)'
       run: |
         PROPS_FILE="${{ steps.creds.outputs.props_file }}"
-        ISSUER_URL=$(grep '^bearer.auth.issuer.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-        CLIENT_ID=$(grep '^bearer.auth.client.id=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-        CLIENT_SECRET=$(grep '^bearer.auth.client.secret=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-        SCOPE=$(grep '^bearer.auth.scope=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        SR_USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
         SR_URL="${{ steps.creds.outputs.sr_url }}"
 
-        echo "::add-mask::$CLIENT_SECRET"
+        echo "::add-mask::$SR_USER_INFO"
 
-        echo "==> Getting OAuth token from Entra ID..."
-        ACCESS_TOKEN=$(curl -sS -X POST "$ISSUER_URL" \
-          -d "grant_type=client_credentials&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&scope=${SCOPE}" \
-          | jq -r '.access_token')
-        echo "::add-mask::$ACCESS_TOKEN"
-
-        if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
-          echo "FAIL: Could not acquire OAuth token"
-          exit 1
-        fi
-        echo "Token acquired (length=${#ACCESS_TOKEN})"
-
-        echo "==> Checking Confluent SR endpoint at ${SR_URL}/subjects ..."
+        echo "==> Checking Confluent SR /subjects at ${SR_URL} ..."
         HTTP_STATUS=$(curl -sS -o /tmp/sr_response.json -w "%{http_code}" \
-          -H "Authorization: Bearer $ACCESS_TOKEN" \
+          -u "$SR_USER_INFO" \
           "${SR_URL}/subjects")
 
         echo "HTTP status: $HTTP_STATUS"
@@ -160,28 +145,21 @@ jobs:
     # ---------------------------------------------------------------
     # Check 2: Avro schema subject exists (Confluent /subjects endpoint)
     # TopicNameStrategy: subject = orders.placed-value
+    # Auth: HTTP Basic (USER_INFO)
     # ---------------------------------------------------------------
     - name: 'Check 2 — Avro schema subject exists (orders.placed-value)'
       run: |
         PROPS_FILE="${{ steps.creds.outputs.props_file }}"
-        ISSUER_URL=$(grep '^bearer.auth.issuer.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-        CLIENT_ID=$(grep '^bearer.auth.client.id=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-        CLIENT_SECRET=$(grep '^bearer.auth.client.secret=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-        SCOPE=$(grep '^bearer.auth.scope=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        SR_USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
         TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
         SR_URL="${{ steps.creds.outputs.sr_url }}"
         SUBJECT="${TOPIC}-value"
 
-        echo "::add-mask::$CLIENT_SECRET"
-
-        ACCESS_TOKEN=$(curl -sS -X POST "$ISSUER_URL" \
-          -d "grant_type=client_credentials&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&scope=${SCOPE}" \
-          | jq -r '.access_token')
-        echo "::add-mask::$ACCESS_TOKEN"
+        echo "::add-mask::$SR_USER_INFO"
 
         echo "==> Checking subject ${SUBJECT} at ${SR_URL}/subjects/${SUBJECT}/versions/latest ..."
         HTTP_STATUS=$(curl -sS -o /tmp/subj_response.json -w "%{http_code}" \
-          -H "Authorization: Bearer $ACCESS_TOKEN" \
+          -u "$SR_USER_INFO" \
           "${SR_URL}/subjects/${SUBJECT}/versions/latest")
 
         echo "HTTP status: $HTTP_STATUS"
