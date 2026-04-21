@@ -61,6 +61,7 @@ jobs:
 
         PROPS_FILE="/tmp/client.properties"
         printf '%s\n' "$CLIENT_PROPS" > "$PROPS_FILE"
+        sed -i 's/\r$//' "$PROPS_FILE"
 
         if [ ! -s "$PROPS_FILE" ]; then
           echo "ERROR: Retrieved kafka-client-properties is empty"
@@ -72,9 +73,9 @@ jobs:
           exit 1
         fi
 
-        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2-)
-        CLIENT_ID=$(echo "$USER_INFO" | cut -d: -f1)
-        CLIENT_SECRET=$(echo "$USER_INFO" | cut -d: -f2-)
+        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r')
+        CLIENT_ID=$(echo "$USER_INFO" | cut -d: -f1 | xargs)
+        CLIENT_SECRET=$(echo "$USER_INFO" | cut -d: -f2- | xargs)
         if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
           echo "ERROR: Failed to resolve client credentials"
           exit 1
