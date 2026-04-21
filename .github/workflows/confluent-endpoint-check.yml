@@ -46,6 +46,11 @@ jobs:
       run: |
         DOMAIN="${{ vars.CUSTOM_DOMAIN_NAME }}"
 
+        if [ -z "$DOMAIN" ]; then
+          echo "ERROR: vars.CUSTOM_DOMAIN_NAME is empty. Set repository/environment variable CUSTOM_DOMAIN_NAME before running this workflow."
+          exit 1
+        fi
+
         KV_NAME=$(terraform output -raw key_vault_name)
         CLIENT_ID=$(terraform output kafka_client_id)
         CLIENT_SECRET=$(az keyvault secret show \
