@@ -26,11 +26,37 @@ jobs:
 
     - name: Download client.properties from Key Vault
       run: |
-        az keyvault secret show \
-          --vault-name "${{ vars.KEY_VAULT_NAME }}" \
+        set -euo pipefail
+
+        KV_NAME="${{ vars.KEY_VAULT_NAME }}"
+        if [ -z "$KV_NAME" ]; then
+          echo "ERROR: vars.KEY_VAULT_NAME is empty. Set repository/environment variable KEY_VAULT_NAME."
+          exit 1
+        fi
+
+        SECRET_VALUE="$(az keyvault secret show \
+          --vault-name "$KV_NAME" \
           --name kafka-client-properties \
-          --query value -o json | jq -r . > client.properties
-        echo "client.properties downloaded successfully"
+          --query value -o tsv)"
+
+        if [ -z "$SECRET_VALUE" ]; then
+          echo "ERROR: Key Vault secret kafka-client-properties is empty."
+          exit 1
+        fi
+
+        printf '%s' "$SECRET_VALUE" > client.properties
+
+        if [ ! -s client.properties ]; then
+          echo "ERROR: client.properties file is empty after retrieval."
+          exit 1
+        fi
+
+        if ! grep -q '^bootstrap\.servers=' client.properties; then
+          echo "ERROR: client.properties missing required bootstrap.servers entry."
+          exit 1
+        fi
+
+        echo "client.properties downloaded and validated successfully"
       env:
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
