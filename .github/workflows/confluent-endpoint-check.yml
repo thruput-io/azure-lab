@@ -44,10 +44,11 @@ jobs:
     - name: Resolve Credentials from Terraform + Key Vault
       id: creds
       run: |
-        DOMAIN="${{ vars.CUSTOM_DOMAIN_NAME }}"
+        BOOTSTRAP=$(terraform output -raw kafka_bootstrap_server)
+        DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
 
         if [ -z "$DOMAIN" ]; then
-          echo "ERROR: vars.CUSTOM_DOMAIN_NAME is empty. Set repository/environment variable CUSTOM_DOMAIN_NAME before running this workflow."
+          echo "ERROR: Failed to resolve domain from terraform output kafka_bootstrap_server"
           exit 1
         fi
 
@@ -91,7 +92,6 @@ jobs:
         echo "::add-mask::$CLIENT_SECRET"
         echo "client_secret=$CLIENT_SECRET" >> $GITHUB_OUTPUT
       env:
-        TF_VAR_custom_domain_name: ${{ vars.CUSTOM_DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
