@@ -3,7 +3,29 @@
 # Exposes the standard Confluent /subjects REST API on port 8081.
 # Deployed in the VNet so it can reach the Event Hub private endpoint.
 # The App Gateway proxies HTTPS :8081 -> ACI :8081 (HTTP within VNet).
+# Image is hosted in Azure Container Registry (ACR) to avoid Docker Hub
+# rate limits on ACI. The deploy pipeline pushes the image to ACR first.
 # ============================================================
+
+# Azure Container Registry for hosting the Confluent SR image
+resource "azurerm_container_registry" "acr" {
+  name                = "acrconfluentsr${random_id.kvname.hex}"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  sku                 = "Basic"
+  admin_enabled       = true
+}
+
+# Grant the deployer identity AcrPush to push the image during pipeline
+resource "azurerm_role_assignment" "deployer_acr_push" {
+  scope                = azurerm_container_registry.acr.id
+  role_definition_name = "AcrPush"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+output "acr_login_server" {
+  value = azurerm_container_registry.acr.login_server
+}
 
 # Dedicated subnet for the Confluent SR ACI
 resource "azurerm_subnet" "sr_subnet" {
@@ -35,9 +57,15 @@ resource "azurerm_container_group" "confluent_sr" {
   os_type             = "Linux"
   restart_policy      = "Always"
 
+  image_registry_credential {
+    server   = azurerm_container_registry.acr.login_server
+    username = azurerm_container_registry.acr.admin_username
+    password = azurerm_container_registry.acr.admin_password
+  }
+
   container {
     name   = "confluent-sr"
-    image  = "confluentinc/cp-schema-registry:7.6.0"
+    image  = "${azurerm_container_registry.acr.login_server}/cp-schema-registry:7.6.0"
     cpu    = "0.5"
     memory = "1"
 

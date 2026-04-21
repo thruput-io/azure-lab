@@ -60,7 +60,40 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
-    - name: Terraform Apply
+    - name: Terraform Apply (phase 1 — infra without ACI)
+      if: github.ref == 'refs/heads/main'
+      run: |
+        terraform apply -auto-approve -input=false \
+          -target=azurerm_container_registry.acr \
+          -target=azurerm_role_assignment.deployer_acr_push
+      env:
+        TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
+        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
+        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
+    - name: Import Confluent SR image to ACR
+      if: github.ref == 'refs/heads/main'
+      run: |
+        ACR_NAME=$(terraform output -raw acr_login_server | cut -d. -f1)
+        az acr import \
+          --name "$ACR_NAME" \
+          --source docker.io/confluentinc/cp-schema-registry:7.6.0 \
+          --image cp-schema-registry:7.6.0 \
+          --force
+      env:
+        TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
+        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
+        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
+    - name: Terraform Apply (phase 2 — full apply)
       if: github.ref == 'refs/heads/main'
       run: terraform apply -auto-approve -input=false
       env:
@@ -72,36 +105,3 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
-    - name: Store Key Vault Name as repository variable
-      if: github.ref == 'refs/heads/main'
-      env:
-        TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
-        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
-        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
-        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        ARM_USE_OIDC: true
-        GH_TOKEN: ${{ secrets.GH_PAT }}
-      run: |
-        KV_NAME=$(terraform output -raw key_vault_name)
-        REPO="${{ github.repository }}"
-        STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-          -X GET \
-          -H "Authorization: Bearer $GH_TOKEN" \
-          -H "Accept: application/vnd.github+json" \
-          "https://api.github.com/repos/$REPO/actions/variables/KEY_VAULT_NAME")
-        if [ "$STATUS" = "200" ]; then
-          curl -s -X PATCH \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/actions/variables/KEY_VAULT_NAME" \
-            -d "{\"name\":\"KEY_VAULT_NAME\",\"value\":\"$KV_NAME\"}"
-        else
-          curl -s -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/actions/variables" \
-            -d "{\"name\":\"KEY_VAULT_NAME\",\"value\":\"$KV_NAME\"}"
-        fi
-        echo "KEY_VAULT_NAME=$KV_NAME stored as repository variable"
