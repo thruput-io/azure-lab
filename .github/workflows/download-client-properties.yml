@@ -13,10 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
 
-    defaults:
-      run:
-        working-directory: ./terraform
-
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -28,31 +24,14 @@ jobs:
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v4
-      with:
-        terraform_wrapper: false
-
-    - name: Terraform Init
-      run: terraform init
-      env:
-        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        ARM_USE_OIDC: true
-
     - name: Download client.properties from Key Vault
       run: |
-        KV_NAME=$(terraform output -raw key_vault_name)
         az keyvault secret show \
-          --vault-name "$KV_NAME" \
+          --vault-name "${{ vars.KEY_VAULT_NAME }}" \
           --name kafka-client-properties \
-          --query value -o tsv > ../client.properties
+          --query value -o json | jq -r . > client.properties
         echo "client.properties downloaded successfully"
       env:
-        TF_VAR_custom_domain_name: ${{ vars.CUSTOM_DOMAIN_NAME }}
-        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
-        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
