@@ -24,13 +24,43 @@ jobs:
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_wrapper: false
+
+    - name: Terraform Init
+      run: terraform init -input=false
+      working-directory: ./terraform
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
+    - name: Resolve Key Vault Name
+      run: |
+        set -euo pipefail
+        KV_NAME="$(terraform output -raw key_vault_name)"
+        if [ -z "$KV_NAME" ]; then
+          echo "ERROR: terraform output key_vault_name is empty."
+          exit 1
+        fi
+        echo "KV_NAME=$KV_NAME" >> "$GITHUB_ENV"
+      working-directory: ./terraform
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
     - name: Download client.properties from Key Vault
       run: |
         set -euo pipefail
 
-        KV_NAME="${{ vars.KEY_VAULT_NAME }}"
+        KV_NAME="${KV_NAME}"
         if [ -z "$KV_NAME" ]; then
-          echo "ERROR: vars.KEY_VAULT_NAME is empty. Set repository/environment variable KEY_VAULT_NAME."
+          echo "ERROR: KV_NAME is empty."
           exit 1
         fi
 
