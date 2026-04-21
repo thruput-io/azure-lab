@@ -21,21 +21,6 @@ resource "azurerm_subnet" "sr_subnet" {
   }
 }
 
-# Network profile for ACI VNet integration
-resource "azurerm_network_profile" "sr_net_profile" {
-  name                = "np-confluent-sr"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-
-  container_network_interface {
-    name = "cni-sr"
-    ip_configuration {
-      name      = "ipconfig-sr"
-      subnet_id = azurerm_subnet.sr_subnet.id
-    }
-  }
-}
-
 # Confluent Schema Registry container instance
 # Connects to EH Kafka via private endpoint (Private DNS resolves
 # evh-lab-xxx.servicebus.windows.net to private IP within VNet).
@@ -46,7 +31,7 @@ resource "azurerm_container_group" "confluent_sr" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   ip_address_type     = "Private"
-  network_profile_id  = azurerm_network_profile.sr_net_profile.id
+  subnet_ids          = [azurerm_subnet.sr_subnet.id]
   os_type             = "Linux"
   restart_policy      = "Always"
 
