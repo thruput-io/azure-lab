@@ -6,13 +6,14 @@ This Proof of Concept (POC) demonstrates how to expose an **Azure Event Hub** vi
 
 - **Private Event Hub**: Event Hub namespace is isolated within a Virtual Network using Private Endpoints.
 - **Application Gateway L4/L7 Support**:
-    - **HTTPS (Port 443)**: Standard L7 routing for REST API / Schema Registry access.
+    - **HTTPS (Port 443)**: Standard L7 routing for Event Hub HTTPS endpoint.
+    - **HTTPS (Port 8081)**: L7 routing for self-hosted Confluent Schema Registry.
     - **AMQP over TLS (Port 5671)**: L4 TLS proxying for AMQP clients.
     - **Kafka over TLS (Port 9093)**: L4 TLS proxying for Kafka clients.
 - **Key Vault Integration**: Application Gateway uses a User-Assigned Managed Identity to retrieve SSL certificates from Azure Key Vault.
 - **Custom Domain**: Configurable custom domain name for all listeners.
 - **Entra ID OAuth2**: Kafka clients authenticate via SASL/OAUTHBEARER using an App Registration.
-- **Avro Schema Registry**: Schema Registry exposed on port 443 with TopicNameStrategy (default).
+- **Avro Schema Registry**: Self-hosted Confluent Schema Registry exposed on port 8081 with TopicNameStrategy (default).
 
 ## Architecture
 
@@ -21,7 +22,8 @@ Internet
    │
    ▼
 Application Gateway v2 (public IP, custom domain)
-   ├── :443  (L7 HTTPS)  → Event Hub Schema Registry (REST)
+   ├── :443  (L7 HTTPS)  → Event Hub HTTPS endpoint
+   ├── :8081 (L7 HTTPS)  → Self-hosted Confluent Schema Registry (/subjects)
    ├── :5671 (L4 TLS)    → Event Hub AMQP
    └── :9093 (L4 TLS)    → Event Hub Kafka
                                 │
@@ -77,7 +79,6 @@ An **Azure AD App Registration** is provisioned automatically by Terraform (`ter
 | `azuread_application_password` | Client secret used as Kafka password |
 | RBAC: `Azure Event Hubs Data Sender` | Allows the app to **produce** messages |
 | RBAC: `Azure Event Hubs Data Receiver` | Allows the app to **consume** messages |
-| RBAC: `Schema Registry Contributor (Preview)` | Allows the app to read/write Avro schemas |
 
 ### Authentication Flow
 
@@ -87,7 +88,7 @@ https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/token
 ```
 with scope `https://eventhubs.azure.net/.default`, using the App Registration's `client_id` and `client_secret`.
 
-The Schema Registry (exposed on port 443 via the Application Gateway) uses **HTTP Basic Auth** with the same `client_id:client_secret` credentials.
+The Schema Registry (exposed on port 8081 via the Application Gateway) uses **HTTP Basic Auth** with the same `client_id:client_secret` credentials.
 
 ---
 
@@ -128,7 +129,6 @@ A placeholder template is also committed at `kafka/client.properties` for refere
 |---|---|
 | Topic name | `orders.placed` |
 | Schema subject | `orders.placed-value` (Confluent **TopicNameStrategy** — default) |
-| Schema group | `orders-schema-group` |
 
 > **TopicNameStrategy** (the Confluent default) derives the subject from the topic name: `<topic>-value`. No extra client configuration is needed.
 
@@ -164,9 +164,9 @@ Following Terraform best practice, a `check` block runs automatically after ever
 
 For a full end-to-end Confluent validation — schema registration, Avro produce, and Avro consume — run the **Confluent Endpoint Check** workflow:
 
-**Actions → Confluent Endpoint Check → Run workflow** (enter your custom domain)
+**Actions → Confluent Endpoint Check → Run workflow**
 
-This workflow uses `confluentinc/cp-schema-registry:7.6.0` with standard Confluent tooling (`kafka-avro-console-producer` / `kafka-avro-console-consumer`) and the `jaas.properties` pattern, connecting via the public Application Gateway endpoints.
+This workflow uses `confluentinc/cp-schema-registry:7.6.0` with standard Confluent tooling (`kafka-avro-console-producer` / `kafka-avro-console-consumer`) and `client.properties`, connecting via the public Application Gateway endpoints.
 
 ---
 
@@ -181,7 +181,7 @@ This workflow uses `confluentinc/cp-schema-registry:7.6.0` with standard Conflue
 | `terraform/providers.tf` | Provider versions, remote state |
 | `terraform/variables.tf` | Input variables |
 | `terraform/entra_app.tf` | App Registration, Service Principal, RBAC, KV secret |
-| `terraform/schema_registry.tf` | Event Hub topic and Schema Group |
+| `terraform/schema_registry.tf` | Event Hub topic |
 | `terraform/check_kafka.tf` | Smoke test + Terraform check block |
 | `kafka/client.properties` | Client config template for Pega and other Java/Confluent clients |
 

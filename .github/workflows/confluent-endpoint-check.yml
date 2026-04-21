@@ -143,11 +143,38 @@ jobs:
         echo "PASS: Schema Registry is reachable (Confluent /subjects endpoint)"
 
     # ---------------------------------------------------------------
-    # Check 2: Avro schema subject exists (Confluent /subjects endpoint)
+    # Check 2: Kafka broker reachable on port 9093 via App Gateway (TCP)
+    # ---------------------------------------------------------------
+    - name: 'Check 2 — Kafka broker TCP reachable via App Gateway (:9093)'
+      run: |
+        echo "==> Checking TCP connectivity to $DOMAIN:9093 ..."
+        if ! timeout 10 bash -c "echo > /dev/tcp/$DOMAIN/9093" 2>/dev/null; then
+          echo "FAIL: Cannot reach $DOMAIN:9093 — check DNS and App Gateway firewall"
+          exit 1
+        fi
+        echo "PASS: $DOMAIN:9093 is reachable"
+      env:
+        DOMAIN: ${{ steps.creds.outputs.domain }}
+
+    # ---------------------------------------------------------------
+    # Check 3: Full Confluent Avro produce + consume via App Gateway
+    # Uses confluentinc/cp-schema-registry:7.6.0 (kafka-avro-console-producer/consumer)
+    # Broker: App Gateway port 9093 (SASL/OAUTHBEARER)
+    # Schema Registry: self-hosted Confluent endpoint via App Gateway :8081 (Basic auth)
+    # ---------------------------------------------------------------
+    - name: 'Check 3 — Produce + Consume Avro message (Confluent standard serializer)'
+      run: |
+        PROPS_FILE="${{ steps.creds.outputs.props_file }}"
+        echo "==> Running Confluent Avro smoke test..."
+        bash ../scripts/confluent-produce-consume-check.sh \
+          --props-file "$PROPS_FILE"
+
+    # ---------------------------------------------------------------
+    # Check 4: Avro schema subject exists (Confluent /subjects endpoint)
     # TopicNameStrategy: subject = orders.placed-value
     # Auth: HTTP Basic (USER_INFO)
     # ---------------------------------------------------------------
-    - name: 'Check 2 — Avro schema subject exists (orders.placed-value)'
+    - name: 'Check 4 — Avro schema subject exists (orders.placed-value)'
       run: |
         PROPS_FILE="${{ steps.creds.outputs.props_file }}"
         SR_USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
@@ -169,33 +196,6 @@ jobs:
           exit 1
         fi
         echo "PASS: Avro schema subject ${SUBJECT} exists"
-
-    # ---------------------------------------------------------------
-    # Check 3: Kafka broker reachable on port 9093 via App Gateway (TCP)
-    # ---------------------------------------------------------------
-    - name: 'Check 3 — Kafka broker TCP reachable via App Gateway (:9093)'
-      run: |
-        echo "==> Checking TCP connectivity to $DOMAIN:9093 ..."
-        if ! timeout 10 bash -c "echo > /dev/tcp/$DOMAIN/9093" 2>/dev/null; then
-          echo "FAIL: Cannot reach $DOMAIN:9093 — check DNS and App Gateway firewall"
-          exit 1
-        fi
-        echo "PASS: $DOMAIN:9093 is reachable"
-      env:
-        DOMAIN: ${{ steps.creds.outputs.domain }}
-
-    # ---------------------------------------------------------------
-    # Check 4: Full Confluent Avro produce + consume via App Gateway
-    # Uses confluentinc/cp-schema-registry:7.6.0 (kafka-avro-console-producer/consumer)
-    # Broker: App Gateway port 9093 (SASL/OAUTHBEARER)
-    # Schema Registry: EH namespace Confluent-compatible endpoint (Bearer auth)
-    # ---------------------------------------------------------------
-    - name: 'Check 4 — Produce + Consume Avro message (Confluent standard serializer)'
-      run: |
-        PROPS_FILE="${{ steps.creds.outputs.props_file }}"
-        echo "==> Running Confluent Avro smoke test..."
-        bash ../scripts/confluent-produce-consume-check.sh \
-          --props-file "$PROPS_FILE"
 
     - name: Summary
       if: always()

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Confluent-standard Kafka Avro produce + consume smoke test.
 # Uses confluentinc/cp-schema-registry image (kafka-avro-console-producer/consumer).
-# Schema Registry auth: Confluent OAUTHBEARER Bearer token from Entra ID.
+# Schema Registry auth: HTTP Basic (schema.registry.basic.auth.user.info).
 # Kafka broker auth: SASL/OAUTHBEARER via App Gateway (port 9093).
 #
 # Usage:
@@ -9,8 +9,7 @@
 #
 # Required keys in client.properties:
 #   bootstrap.servers, schema.registry.url,
-#   bearer.auth.issuer.endpoint.url, bearer.auth.client.id, bearer.auth.client.secret,
-#   bearer.auth.scope (optional, defaults to https://eventhubs.azure.net/.default),
+#   schema.registry.basic.auth.user.info,
 #   security.protocol, sasl.mechanism, sasl.jaas.config,
 #   sasl.login.callback.handler.class, sasl.oauthbearer.token.endpoint.url
 
@@ -71,7 +70,10 @@ if [[ -z "$TOPIC" ]]; then
   TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || echo "orders.placed")
 fi
 
-EXPECTED_TS=$(date +%s%3N)
+EXPECTED_TS=$(date +%s%3N 2>/dev/null || true)
+if [[ -z "$EXPECTED_TS" || "$EXPECTED_TS" == *N ]]; then
+  EXPECTED_TS=$(($(date +%s) * 1000))
+fi
 ORDER_ID="check-${EXPECTED_TS}"
 
 echo "==> bootstrap.servers=${BOOTSTRAP}"
