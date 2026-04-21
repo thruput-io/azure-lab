@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Confluent-standard Kafka Avro produce + consume smoke test.
 # Uses confluentinc/cp-schema-registry image (kafka-avro-console-producer/consumer).
-# Schema Registry auth: HTTP Basic (schema.registry.basic.auth.user.info).
+# Schema Registry auth: OAuth Bearer (bearer.auth.* properties).
 # Kafka broker auth: SASL/OAUTHBEARER via App Gateway (port 9093).
 #
 # Usage:
@@ -9,7 +9,8 @@
 #
 # Required keys in client.properties:
 #   bootstrap.servers, schema.registry.url,
-#   schema.registry.basic.auth.user.info,
+#   bearer.auth.issuer.endpoint.url, bearer.auth.client.id,
+#   bearer.auth.client.secret, bearer.auth.scope,
 #   security.protocol, sasl.mechanism, sasl.jaas.config,
 #   sasl.login.callback.handler.class, sasl.oauthbearer.token.endpoint.url
 
@@ -55,7 +56,13 @@ if [[ ! -s "$PROPS_FILE" ]]; then
   exit 1
 fi
 
-for key in bootstrap.servers schema.registry.url schema.registry.basic.auth.user.info; do
+for key in \
+  bootstrap.servers \
+  schema.registry.url \
+  bearer.auth.issuer.endpoint.url \
+  bearer.auth.client.id \
+  bearer.auth.client.secret \
+  bearer.auth.scope; do
   if ! grep -q "^${key}=" "$PROPS_FILE"; then
     echo "ERROR: client.properties missing required key: ${key}"
     exit 1
@@ -64,7 +71,10 @@ done
 
 BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 SR_URL=$(grep '^schema.registry.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-SR_USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+SR_ISSUER_URL=$(grep '^bearer.auth.issuer.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+SR_CLIENT_ID=$(grep '^bearer.auth.client.id=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+SR_CLIENT_SECRET=$(grep '^bearer.auth.client.secret=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+SR_SCOPE=$(grep '^bearer.auth.scope=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 
 if [[ -z "$TOPIC" ]]; then
   TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || echo "orders.placed")
@@ -86,10 +96,24 @@ AVRO_SCHEMA='{"type":"record","name":"OrderPlaced","namespace":"se.thruput.order
 
 echo "==> Registering Avro schema (TopicNameStrategy subject: ${TOPIC}-value)..."
 SUBJECT="${TOPIC}-value"
+
+echo "==> Getting OAuth token for Schema Registry..."
+ACCESS_TOKEN=$(curl -sS -X POST "$SR_ISSUER_URL" \
+  --data-urlencode "grant_type=client_credentials" \
+  --data-urlencode "client_id=${SR_CLIENT_ID}" \
+  --data-urlencode "client_secret=${SR_CLIENT_SECRET}" \
+  --data-urlencode "scope=${SR_SCOPE}" \
+  | jq -r '.access_token')
+
+if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
+  echo "ERROR: Could not acquire OAuth token for Schema Registry"
+  exit 1
+fi
+
 REG_STATUS=$(curl -sS -o /tmp/sr_reg_resp.json -w "%{http_code}" \
   -X POST "${SR_URL}/subjects/${SUBJECT}/versions" \
   -H "Content-Type: application/vnd.schemaregistry.v1+json" \
-  -u "${SR_USER_INFO}" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -d "{\"schema\": $(echo "$AVRO_SCHEMA" | jq -Rs .)}")
 
 echo "Schema registration HTTP status: $REG_STATUS"
@@ -110,8 +134,11 @@ sasl.login.callback.handler.class=$(grep '^sasl.login.callback.handler.class=' "
 sasl.oauthbearer.token.endpoint.url=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 sasl.jaas.config=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)
 schema.registry.url=${SR_URL}
-basic.auth.credentials.source=USER_INFO
-schema.registry.basic.auth.user.info=${SR_USER_INFO}
+bearer.auth.credentials.source=OAUTHBEARER
+bearer.auth.issuer.endpoint.url=${SR_ISSUER_URL}
+bearer.auth.client.id=${SR_CLIENT_ID}
+bearer.auth.client.secret=${SR_CLIENT_SECRET}
+bearer.auth.scope=${SR_SCOPE}
 EOF
 
 cp "$PRODUCER_CFG" /tmp/producer.properties

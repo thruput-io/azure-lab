@@ -47,8 +47,7 @@ resource "azurerm_key_vault_secret" "kafka_client_secret" {
 # --- Store rendered client.properties in Key Vault for team retrieval ---
 # 100% Confluent-compatible configuration.
 # Kafka broker: App Gateway (port 9093), SASL/OAUTHBEARER via Entra ID.
-# Schema Registry: native EH namespace endpoint with Confluent Bearer auth.
-#   Azure Event Hubs Schema Registry exposes a Confluent-compatible REST API (/subjects).
+# Schema Registry: self-hosted Confluent SR via App Gateway (port 8081).
 #   Auth: bearer.auth.credentials.source=OAUTHBEARER with Entra ID client credentials.
 resource "azurerm_key_vault_secret" "kafka_client_properties" {
   name         = "kafka-client-properties"
@@ -68,8 +67,11 @@ resource "azurerm_key_vault_secret" "kafka_client_properties" {
     "# Schema Registry — self-hosted Confluent SR via App Gateway (port 8081)",
     "# ============================================================",
     "schema.registry.url=https://${var.custom_domain_name}:8081",
-    "basic.auth.credentials.source=USER_INFO",
-    "schema.registry.basic.auth.user.info=${azuread_application.kafka_client.client_id}:${azuread_application_password.kafka_client_secret.value}",
+    "bearer.auth.credentials.source=OAUTHBEARER",
+    "bearer.auth.issuer.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
+    "bearer.auth.client.id=${azuread_application.kafka_client.client_id}",
+    "bearer.auth.client.secret=${azuread_application_password.kafka_client_secret.value}",
+    "bearer.auth.scope=https://eventhubs.azure.net/.default",
     "",
     "# ============================================================",
     "# Confluent-standard Avro serializer/deserializer",
