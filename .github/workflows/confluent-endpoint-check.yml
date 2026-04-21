@@ -2,11 +2,6 @@ name: 'Confluent Endpoint Check'
 
 on:
   workflow_dispatch:
-    inputs:
-      custom_domain:
-        description: 'Custom domain name (e.g. eventhub.thruput.se)'
-        required: true
-        type: string
 
 permissions:
   id-token: write
@@ -49,6 +44,8 @@ jobs:
     - name: Resolve Credentials from Terraform + Key Vault
       id: creds
       run: |
+        DOMAIN="${{ vars.CUSTOM_DOMAIN_NAME }}"
+
         KV_NAME=$(terraform output -raw key_vault_name)
         CLIENT_ID=$(terraform output kafka_client_id)
         CLIENT_SECRET=$(az keyvault secret show \
@@ -56,7 +53,6 @@ jobs:
           --name kafka-client-secret \
           --query value -o tsv)
         TENANT_ID="${{ secrets.AZURE_TENANT_ID }}"
-        DOMAIN="${{ inputs.custom_domain }}"
 
         echo "client_id=$CLIENT_ID"         >> $GITHUB_OUTPUT
         echo "tenant_id=$TENANT_ID"         >> $GITHUB_OUTPUT
@@ -66,7 +62,7 @@ jobs:
         echo "::add-mask::$CLIENT_SECRET"
         echo "client_secret=$CLIENT_SECRET" >> $GITHUB_OUTPUT
       env:
-        TF_VAR_custom_domain_name: ${{ inputs.custom_domain }}
+        TF_VAR_custom_domain_name: ${{ vars.CUSTOM_DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -252,7 +248,7 @@ jobs:
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| Check | Endpoint |" >> $GITHUB_STEP_SUMMARY
         echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-        echo "| Schema Registry (HTTPS) | https://${{ inputs.custom_domain }}/subjects |" >> $GITHUB_STEP_SUMMARY
+        echo "| Schema Registry (HTTPS) | https://${{ steps.creds.outputs.domain }}/subjects |" >> $GITHUB_STEP_SUMMARY
         echo "| Schema subject | \`orders.placed-value\` (TopicNameStrategy) |" >> $GITHUB_STEP_SUMMARY
-        echo "| Kafka broker (TCP) | \`${{ inputs.custom_domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| Kafka broker (TCP) | \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
         echo "| Produce + Consume (Avro) | topic \`orders.placed\` via Confluent \`cp-schema-registry:7.6.0\` |" >> $GITHUB_STEP_SUMMARY

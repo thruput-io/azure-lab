@@ -25,16 +25,8 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v6
 
-    - name: Verify Secrets
-      run: |
-        if [ -z "${{ secrets.PFX_BASE64 }}" ]; then echo "Error: PFX_BASE64 secret is missing"; exit 1; fi
-        if [ -z "${{ secrets.PFX_PASSWORD }}" ]; then echo "Error: PFX_PASSWORD secret is missing"; exit 1; fi
-        if [ -z "${{ vars.CUSTOM_DOMAIN_NAME }}" ] && [ -z "${{ secrets.CUSTOM_DOMAIN_NAME }}" ]; then echo "Error: CUSTOM_DOMAIN_NAME is missing"; exit 1; fi
-
     - name: Set Domain Name
-      run: |
-        DOMAIN="${{ vars.CUSTOM_DOMAIN_NAME || secrets.CUSTOM_DOMAIN_NAME }}"
-        echo "DOMAIN_NAME=$DOMAIN" >> $GITHUB_ENV
+      run: echo "DOMAIN_NAME=${{ vars.CUSTOM_DOMAIN_NAME }}" >> $GITHUB_ENV
 
     - name: Azure Login
       uses: azure/login@v3

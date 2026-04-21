@@ -50,7 +50,7 @@ jobs:
           --query value -o tsv > ../client.properties
         echo "client.properties downloaded successfully"
       env:
-        TF_VAR_custom_domain_name: "placeholder"
+        TF_VAR_custom_domain_name: ${{ vars.CUSTOM_DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
