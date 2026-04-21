@@ -41,7 +41,7 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
-    - name: Resolve Credentials from Terraform + Key Vault
+    - name: Resolve client.properties from Terraform + Key Vault
       id: creds
       run: |
         BOOTSTRAP=$(terraform output -raw kafka_bootstrap_server)
@@ -73,22 +73,8 @@ jobs:
           exit 1
         fi
 
-        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r')
-        CLIENT_ID=$(echo "$USER_INFO" | cut -d: -f1 | xargs)
-        CLIENT_SECRET=$(echo "$USER_INFO" | cut -d: -f2- | xargs)
-        if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
-          echo "ERROR: Failed to resolve client credentials"
-          exit 1
-        fi
-
-        echo "client_id=$CLIENT_ID"         >> $GITHUB_OUTPUT
-        echo "tenant_id=$TENANT_ID"         >> $GITHUB_OUTPUT
         echo "domain=$DOMAIN"               >> $GITHUB_OUTPUT
         echo "props_file=$PROPS_FILE"       >> $GITHUB_OUTPUT
-
-        # Mask the secret so it never appears in logs
-        echo "::add-mask::$CLIENT_SECRET"
-        echo "client_secret=$CLIENT_SECRET" >> $GITHUB_OUTPUT
       env:
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
@@ -139,9 +125,15 @@ jobs:
     # ---------------------------------------------------------------
     - name: 'Check 1 — Schema Registry reachable (HTTPS :443)'
       run: |
+        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r')
+        if [ -z "$USER_INFO" ]; then
+          echo "FAIL: Missing schema.registry.basic.auth.user.info in client.properties"
+          exit 1
+        fi
+
         echo "==> Checking Schema Registry at https://$DOMAIN/subjects ..."
         HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-          -u "$CLIENT_ID:$CLIENT_SECRET" \
+          -u "$USER_INFO" \
           "https://$DOMAIN/subjects")
 
         echo "HTTP status: $HTTP_STATUS"
@@ -152,18 +144,23 @@ jobs:
         echo "PASS: Schema Registry is reachable"
       env:
         DOMAIN: ${{ steps.creds.outputs.domain }}
-        CLIENT_ID: ${{ steps.creds.outputs.client_id }}
-        CLIENT_SECRET: ${{ steps.creds.outputs.client_secret }}
+        PROPS_FILE: ${{ steps.creds.outputs.props_file }}
 
     # ---------------------------------------------------------------
     # Check 2: Schema subject exists (TopicNameStrategy)
     # ---------------------------------------------------------------
     - name: 'Check 2 — Avro schema subject exists (TopicNameStrategy)'
       run: |
+        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r')
+        if [ -z "$USER_INFO" ]; then
+          echo "FAIL: Missing schema.registry.basic.auth.user.info in client.properties"
+          exit 1
+        fi
+
         SUBJECT="orders.placed-value"
         echo "==> Checking schema subject $SUBJECT ..."
         HTTP_STATUS=$(curl -s -o /tmp/sr_response.json -w "%{http_code}" \
-          -u "$CLIENT_ID:$CLIENT_SECRET" \
+          -u "$USER_INFO" \
           "https://$DOMAIN/subjects/$SUBJECT/versions/latest")
 
         echo "HTTP status: $HTTP_STATUS"
@@ -175,8 +172,7 @@ jobs:
         echo "PASS: Schema subject $SUBJECT exists"
       env:
         DOMAIN: ${{ steps.creds.outputs.domain }}
-        CLIENT_ID: ${{ steps.creds.outputs.client_id }}
-        CLIENT_SECRET: ${{ steps.creds.outputs.client_secret }}
+        PROPS_FILE: ${{ steps.creds.outputs.props_file }}
 
     # ---------------------------------------------------------------
     # Check 3: Kafka broker reachable on port 9093 (TCP)
@@ -200,60 +196,12 @@ jobs:
     # ---------------------------------------------------------------
     - name: 'Check 4 — Produce + Consume Avro message (Confluent standard)'
       run: |
-        TOPIC="orders.placed"
-        IMAGE="confluentinc/cp-schema-registry:7.6.0"
         PROPS_FILE="${{ steps.creds.outputs.props_file }}"
-
         echo "==> Using client.properties from Key Vault secret kafka-client-properties"
-
-        echo "==> Pulling Confluent image $IMAGE ..."
-        docker pull "$IMAGE"
-
-        # Capture timestamp on the host so we can verify it after consume
-        EXPECTED_TS=$(date +%s%3N)
-        echo "==> Producing one Avro message to topic $TOPIC (timestamp=$EXPECTED_TS) ..."
-        docker run --rm \
-          -v "$PROPS_FILE:/etc/kafka/client.properties:ro" \
-          -e TOPIC="$TOPIC" \
-          -e EXPECTED_TS="$EXPECTED_TS" \
-          "$IMAGE" \
-          bash -c '
-            echo "{\"order_id\":\"check-$EXPECTED_TS\",\"product\":\"endpoint-check\",\"quantity\":1,\"timestamp\":$EXPECTED_TS}" | \
-            kafka-avro-console-producer \
-              --broker-list "$(grep "^bootstrap.servers" /etc/kafka/client.properties | cut -d= -f2-)" \
-              --topic "$TOPIC" \
-              --producer.config /etc/kafka/client.properties
-          '
-
-        echo "==> Consuming the Avro message from topic $TOPIC (expecting timestamp=$EXPECTED_TS) ..."
-        CONSUMED=$(docker run --rm \
-          -v "$PROPS_FILE:/etc/kafka/client.properties:ro" \
-          -e TOPIC="$TOPIC" \
-          "$IMAGE" \
-          bash -c '
-            kafka-avro-console-consumer \
-              --bootstrap-server "$(grep "^bootstrap.servers" /etc/kafka/client.properties | cut -d= -f2-)" \
-              --topic "$TOPIC" \
-              --max-messages 1 \
-              --timeout-ms 30000 \
-              --consumer.config /etc/kafka/client.properties
-          ' 2>/dev/null)
-
-        echo "Consumed: $CONSUMED"
-        if echo "$CONSUMED" | grep -q "\"timestamp\":$EXPECTED_TS"; then
-          echo "PASS: Consumed message matches expected timestamp $EXPECTED_TS"
-        else
-          echo "FAIL: Consumed message does not contain expected timestamp $EXPECTED_TS"
-          exit 1
-        fi
-
-        echo "PASS: Produce + Consume completed successfully"
-      env:
-        DOMAIN: ${{ steps.creds.outputs.domain }}
-        TENANT_ID: ${{ steps.creds.outputs.tenant_id }}
-        CLIENT_ID: ${{ steps.creds.outputs.client_id }}
-        CLIENT_SECRET: ${{ steps.creds.outputs.client_secret }}
-
+        bash ../scripts/confluent-produce-consume-check.sh \
+          --props-file "$PROPS_FILE" \
+          --topic "orders.placed" \
+          --image "confluentinc/cp-schema-registry:7.6.0"
     - name: Summary
       if: always()
       run: |
