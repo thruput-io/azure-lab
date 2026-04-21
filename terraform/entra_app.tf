@@ -30,7 +30,7 @@ resource "azurerm_role_assignment" "kafka_client_receiver" {
 # --- RBAC: Schema Registry Contributor ---
 resource "azurerm_role_assignment" "kafka_client_schema_registry" {
   scope                = azurerm_eventhub_namespace.evh.id
-  role_definition_name = "Schema Registry Contributor (Preview)"
+  role_definition_name = "Schema Registry Contributor"
   principal_id         = azuread_service_principal.kafka_client.object_id
 }
 

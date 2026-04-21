@@ -1,10 +1,9 @@
 # Event Hub (Topic) - Confluent naming convention: <domain>.<entity>
 resource "azurerm_eventhub" "orders_topic" {
-  name                = "orders.placed"
-  namespace_name      = azurerm_eventhub_namespace.evh.name
-  resource_group_name = azurerm_resource_group.rg.name
-  partition_count     = 4
-  message_retention   = 1
+  name              = "orders.placed"
+  namespace_id      = azurerm_eventhub_namespace.evh.id
+  partition_count   = 4
+  message_retention = 1
 }
 
 # Schema Group - Avro with Forward compatibility
