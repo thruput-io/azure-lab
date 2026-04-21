@@ -26,7 +26,13 @@ jobs:
       uses: actions/checkout@v6
 
     - name: Set Domain Name
-      run: echo "DOMAIN_NAME=${{ vars.CUSTOM_DOMAIN_NAME }}" >> $GITHUB_ENV
+      run: |
+        DOMAIN="${{ vars.CUSTOM_DOMAIN_NAME || secrets.CUSTOM_DOMAIN_NAME }}"
+        if [ -z "$DOMAIN" ]; then
+          echo "Error: CUSTOM_DOMAIN_NAME is not set in repository variables or secrets"
+          exit 1
+        fi
+        echo "DOMAIN_NAME=$DOMAIN" >> $GITHUB_ENV
 
     - name: Azure Login
       uses: azure/login@v3
