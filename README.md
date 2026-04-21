@@ -58,7 +58,7 @@ This project includes a GitHub Actions pipeline for automated deployment.
     - `PFX_BASE64`: Base64 encoded content of your PFX certificate.
     - `PFX_PASSWORD`: Password for the PFX certificate.
 3.  **GitHub Variables**: Add the following variable:
-    - `CUSTOM_DOMAIN_NAME`: Your custom domain name (e.g., `eventhub.thruput.se`).
+    - `CUSTOM_DOMAIN_NAME`: Your custom domain name (single source of truth for this project, e.g., `eventhub.example.com`).
 
 The pipeline triggers automatically on any push to the `main` branch.
 
@@ -158,7 +158,7 @@ The schema is registered automatically by the **Confluent Endpoint Check** workf
 
 Following Terraform best practice, a `check` block runs automatically after every `terraform apply`. It asserts that the Schema Registry endpoint is reachable and returns HTTP 200 — a lightweight, idiomatic health check with no external dependencies.
 
-> The `check` block is non-blocking: a failure raises a warning but does not fail the apply. DNS must resolve `eventhub.thruput.se` to the Application Gateway public IP before the check runs.
+> The `check` block is non-blocking: a failure raises a warning but does not fail the apply. DNS must resolve `CUSTOM_DOMAIN_NAME` to the Application Gateway public IP before the check runs.
 
 ### Full Confluent Endpoint Check (GitHub Actions)
 

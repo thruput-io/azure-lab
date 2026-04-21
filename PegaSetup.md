@@ -15,7 +15,7 @@ In **Pega Designer Studio**:
 
 1. Navigate to **Records → Integration-Resources → Kafka Configuration**
 2. Create a new rule (e.g. `EventHubKafkaConfig`)
-3. Set **Bootstrap servers**: `eventhub.thruput.se:9093`
+3. Set **Bootstrap servers**: `<CUSTOM_DOMAIN_NAME>:9093` (use the same domain configured in `CUSTOM_DOMAIN_NAME`)
 4. Under **Additional client properties**, upload or paste the contents of `client.properties`
 
 The relevant properties Pega reads from `client.properties`:
@@ -41,7 +41,7 @@ Pega manages Schema Registry configuration separately from the Kafka broker conf
 
 1. Navigate to **Records → Integration-Resources → Avro Schema**
 2. Create a new rule (e.g. `OrderPlacedAvroSchema`)
-3. Set **Schema Registry URL**: `https://eventhub.thruput.se`
+3. Set **Schema Registry URL**: `https://<CUSTOM_DOMAIN_NAME>`
 4. Set **Authentication**: Basic Auth
    - **Username**: `<CLIENT_ID>` (from the downloaded `client.properties` — value of `schema.registry.basic.auth.user.info` before the `:`)
    - **Password**: `<CLIENT_SECRET>` (from the downloaded `client.properties`)
@@ -99,7 +99,7 @@ Before wiring up a full Pega case or flow, verify the end-to-end path by produci
 
 Run the **Confluent Endpoint Check** workflow — it produces one Avro message with a known `order_id` and `timestamp`:
 
-**Actions → Confluent Endpoint Check → Run workflow** (enter `eventhub.thruput.se`)
+**Actions → Confluent Endpoint Check → Run workflow** (enter the same `CUSTOM_DOMAIN_NAME` value)
 
 After the workflow completes, trigger a **Browse** or **Run** on the `OrderPlacedDataSet` in Pega. You should see a record with:
 
@@ -152,7 +152,7 @@ echo "Produced message with order_id=pega-test-$TS"
 | Item                                     | Status      | Notes                                                            |
 |------------------------------------------|-------------|------------------------------------------------------------------|
 | Kafka broker (SASL/OAUTHBEARER)          | ✅ Supported | Requires Pega **24.1.3+**                                        |
-| Bootstrap server via App Gateway `:9093` | ✅ Supported | L4 TLS proxy — SNI must match `eventhub.thruput.se`              |
+| Bootstrap server via App Gateway `:9093` | ✅ Supported | L4 TLS proxy — SNI must match your `CUSTOM_DOMAIN_NAME` value    |
 | Avro message format                      | ✅ Supported | Pega 8.7+                                                        |
 | Schema Registry URL (HTTPS `:443`)       | ✅ Supported | Configure in Avro Schema rule                                    |
 | Schema Registry Basic Auth               | ✅ Supported | Pega 8.7.6+                                                      |
