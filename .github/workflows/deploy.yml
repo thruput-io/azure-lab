@@ -10,7 +10,6 @@ on:
 permissions:
   id-token: write
   contents: read
-  actions: write
 
 jobs:
   terraform:
@@ -83,7 +82,7 @@ jobs:
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GH_PAT }}
       run: |
         KV_NAME=$(terraform output -raw key_vault_name)
         REPO="${{ github.repository }}"
