@@ -45,25 +45,48 @@ resource "azurerm_key_vault_secret" "kafka_client_secret" {
 }
 
 # --- Store rendered client.properties in Key Vault for team retrieval ---
+# 100% Confluent-compatible configuration.
+# Kafka broker: App Gateway (port 9093), SASL/OAUTHBEARER via Entra ID.
+# Schema Registry: native EH namespace endpoint with Confluent Bearer auth.
+#   Azure Event Hubs Schema Registry exposes a Confluent-compatible REST API (/subjects).
+#   Auth: bearer.auth.credentials.source=OAUTHBEARER with Entra ID client credentials.
 resource "azurerm_key_vault_secret" "kafka_client_properties" {
   name         = "kafka-client-properties"
   key_vault_id = azurerm_key_vault.kv.id
   value = join("\n", [
+    "# ============================================================",
+    "# Kafka broker — via Application Gateway (public endpoint)",
+    "# ============================================================",
     "bootstrap.servers=${var.custom_domain_name}:9093",
     "security.protocol=SASL_SSL",
     "sasl.mechanism=OAUTHBEARER",
     "sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler",
     "sasl.oauthbearer.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
     "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"${azuread_application.kafka_client.client_id}\" clientSecret=\"${azuread_application_password.kafka_client_secret.value}\" scope=\"https://eventhubs.azure.net/.default\";",
-    "schema.registry.url=https://${var.custom_domain_name}",
+    "",
+    "# ============================================================",
+    "# Schema Registry — Azure Event Hubs Confluent-compatible endpoint",
+    "# ============================================================",
+    "schema.registry.url=https://${azurerm_eventhub_namespace.evh.name}.servicebus.windows.net",
+    "basic.auth.credentials.source=OAUTHBEARER",
     "bearer.auth.credentials.source=OAUTHBEARER",
     "bearer.auth.issuer.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
     "bearer.auth.client.id=${azuread_application.kafka_client.client_id}",
     "bearer.auth.client.secret=${azuread_application_password.kafka_client_secret.value}",
     "bearer.auth.scope=https://eventhubs.azure.net/.default",
+    "",
+    "# ============================================================",
+    "# Confluent-standard Avro serializer/deserializer",
+    "# ============================================================",
     "value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer",
     "value.deserializer=io.confluent.kafka.serializers.KafkaAvroDeserializer",
-    "specific.avro.reader=true",
+    "specific.avro.reader=false",
+    "value.subject.name.strategy=io.confluent.kafka.serializers.subject.TopicNameStrategy",
+    "",
+    "# ============================================================",
+    "# Topic",
+    "# ============================================================",
+    "topic=${azurerm_eventhub.orders_topic.name}",
   ])
 
   depends_on = [azurerm_role_assignment.deployer_kv_secrets_officer]
@@ -84,5 +107,6 @@ output "kafka_bootstrap_server" {
 }
 
 output "schema_registry_url" {
-  value = "https://${var.custom_domain_name}"
+  value       = "https://${azurerm_eventhub_namespace.evh.name}.servicebus.windows.net"
+  description = "Azure Event Hubs Schema Registry URL — Confluent-compatible /subjects endpoint"
 }

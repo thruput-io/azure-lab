@@ -41,7 +41,7 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
-    - name: Resolve client.properties from Terraform + Key Vault
+    - name: Resolve client.properties from Key Vault
       id: creds
       run: |
         BOOTSTRAP=$(terraform output -raw kafka_bootstrap_server)
@@ -57,7 +57,6 @@ jobs:
           --vault-name "$KV_NAME" \
           --name kafka-client-properties \
           --query value -o tsv)
-        TENANT_ID="${{ secrets.AZURE_TENANT_ID }}"
 
         PROPS_FILE="/tmp/client.properties"
         printf '%s\n' "$CLIENT_PROPS" > "$PROPS_FILE"
@@ -73,8 +72,10 @@ jobs:
           exit 1
         fi
 
-        echo "domain=$DOMAIN"               >> $GITHUB_OUTPUT
-        echo "props_file=$PROPS_FILE"       >> $GITHUB_OUTPUT
+        SR_URL=$(terraform output -raw schema_registry_url)
+        echo "domain=$DOMAIN"           >> $GITHUB_OUTPUT
+        echo "props_file=$PROPS_FILE"   >> $GITHUB_OUTPUT
+        echo "sr_url=$SR_URL"           >> $GITHUB_OUTPUT
       env:
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
@@ -92,18 +93,15 @@ jobs:
         echo "==> Verifying TLS certificate for $DOMAIN ..."
         CERT_RESULT=$(echo | openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" 2>/dev/null)
 
-        # Check verify return code
         if ! echo "$CERT_RESULT" | grep -q "Verify return code: 0 (ok)"; then
           VERIFY_CODE=$(echo "$CERT_RESULT" | grep "Verify return code:" || echo "(not found)")
           echo "FAIL: TLS certificate verification failed — $VERIFY_CODE"
           exit 1
         fi
 
-        # Check hostname matches
         CERT_CN=$(echo "$CERT_RESULT" | openssl x509 -noout -subject 2>/dev/null | sed 's/.*CN *= *//')
         echo "Certificate CN: $CERT_CN"
 
-        # Check expiry
         EXPIRY=$(echo "$CERT_RESULT" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
         echo "Certificate expires: $EXPIRY"
         EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$EXPIRY" +%s 2>/dev/null)
@@ -120,65 +118,84 @@ jobs:
         DOMAIN: ${{ steps.creds.outputs.domain }}
 
     # ---------------------------------------------------------------
-    # Check 1: Schema Registry reachable (HTTPS/443)
-    # Uses standard Confluent HTTP Basic auth with client_id:secret
+    # Check 1: Schema Registry reachable — Confluent /subjects endpoint
+    # Auth: Entra ID Bearer token (scope=eventhubs.azure.net/.default)
     # ---------------------------------------------------------------
-    - name: 'Check 1 — Schema Registry reachable (HTTPS :443)'
+    - name: 'Check 1 — Schema Registry reachable (Confluent /subjects endpoint)'
       run: |
-        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        if [ -z "$USER_INFO" ]; then
-          echo "FAIL: Missing schema.registry.basic.auth.user.info in client.properties"
+        PROPS_FILE="${{ steps.creds.outputs.props_file }}"
+        ISSUER_URL=$(grep '^bearer.auth.issuer.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        CLIENT_ID=$(grep '^bearer.auth.client.id=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        CLIENT_SECRET=$(grep '^bearer.auth.client.secret=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        SCOPE=$(grep '^bearer.auth.scope=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        SR_URL="${{ steps.creds.outputs.sr_url }}"
+
+        echo "::add-mask::$CLIENT_SECRET"
+
+        echo "==> Getting OAuth token from Entra ID..."
+        ACCESS_TOKEN=$(curl -sS -X POST "$ISSUER_URL" \
+          -d "grant_type=client_credentials&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&scope=${SCOPE}" \
+          | jq -r '.access_token')
+        echo "::add-mask::$ACCESS_TOKEN"
+
+        if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
+          echo "FAIL: Could not acquire OAuth token"
           exit 1
         fi
+        echo "Token acquired (length=${#ACCESS_TOKEN})"
 
-        echo "==> Checking Schema Registry at https://$DOMAIN/subjects ..."
-        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-          -u "$USER_INFO" \
-          "https://$DOMAIN/subjects")
-
-        echo "HTTP status: $HTTP_STATUS"
-        if [ "$HTTP_STATUS" != "200" ]; then
-          echo "FAIL: Schema Registry returned $HTTP_STATUS (expected 200)"
-          exit 1
-        fi
-        echo "PASS: Schema Registry is reachable"
-      env:
-        DOMAIN: ${{ steps.creds.outputs.domain }}
-        PROPS_FILE: ${{ steps.creds.outputs.props_file }}
-
-    # ---------------------------------------------------------------
-    # Check 2: Schema subject exists (TopicNameStrategy)
-    # ---------------------------------------------------------------
-    - name: 'Check 2 — Avro schema subject exists (TopicNameStrategy)'
-      run: |
-        USER_INFO=$(grep '^schema.registry.basic.auth.user.info=' "$PROPS_FILE" | cut -d= -f2- | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        if [ -z "$USER_INFO" ]; then
-          echo "FAIL: Missing schema.registry.basic.auth.user.info in client.properties"
-          exit 1
-        fi
-
-        SUBJECT="orders.placed-value"
-        echo "==> Checking schema subject $SUBJECT ..."
-        HTTP_STATUS=$(curl -s -o /tmp/sr_response.json -w "%{http_code}" \
-          -u "$USER_INFO" \
-          "https://$DOMAIN/subjects/$SUBJECT/versions/latest")
+        echo "==> Checking Confluent SR endpoint at ${SR_URL}/subjects ..."
+        HTTP_STATUS=$(curl -sS -o /tmp/sr_response.json -w "%{http_code}" \
+          -H "Authorization: Bearer $ACCESS_TOKEN" \
+          "${SR_URL}/subjects")
 
         echo "HTTP status: $HTTP_STATUS"
         cat /tmp/sr_response.json
         if [ "$HTTP_STATUS" != "200" ]; then
-          echo "FAIL: Schema subject not found (status $HTTP_STATUS)"
+          echo "FAIL: Schema Registry /subjects returned $HTTP_STATUS (expected 200)"
           exit 1
         fi
-        echo "PASS: Schema subject $SUBJECT exists"
-      env:
-        DOMAIN: ${{ steps.creds.outputs.domain }}
-        PROPS_FILE: ${{ steps.creds.outputs.props_file }}
+        echo "PASS: Schema Registry is reachable (Confluent /subjects endpoint)"
 
     # ---------------------------------------------------------------
-    # Check 3: Kafka broker reachable on port 9093 (TCP)
-    # Simple connectivity check before attempting full produce/consume
+    # Check 2: Avro schema subject exists (Confluent /subjects endpoint)
+    # TopicNameStrategy: subject = orders.placed-value
     # ---------------------------------------------------------------
-    - name: 'Check 3 — Kafka broker TCP reachable (:9093)'
+    - name: 'Check 2 — Avro schema subject exists (orders.placed-value)'
+      run: |
+        PROPS_FILE="${{ steps.creds.outputs.props_file }}"
+        ISSUER_URL=$(grep '^bearer.auth.issuer.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        CLIENT_ID=$(grep '^bearer.auth.client.id=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        CLIENT_SECRET=$(grep '^bearer.auth.client.secret=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        SCOPE=$(grep '^bearer.auth.scope=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        SR_URL="${{ steps.creds.outputs.sr_url }}"
+        SUBJECT="${TOPIC}-value"
+
+        echo "::add-mask::$CLIENT_SECRET"
+
+        ACCESS_TOKEN=$(curl -sS -X POST "$ISSUER_URL" \
+          -d "grant_type=client_credentials&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&scope=${SCOPE}" \
+          | jq -r '.access_token')
+        echo "::add-mask::$ACCESS_TOKEN"
+
+        echo "==> Checking subject ${SUBJECT} at ${SR_URL}/subjects/${SUBJECT}/versions/latest ..."
+        HTTP_STATUS=$(curl -sS -o /tmp/subj_response.json -w "%{http_code}" \
+          -H "Authorization: Bearer $ACCESS_TOKEN" \
+          "${SR_URL}/subjects/${SUBJECT}/versions/latest")
+
+        echo "HTTP status: $HTTP_STATUS"
+        cat /tmp/subj_response.json
+        if [ "$HTTP_STATUS" != "200" ]; then
+          echo "FAIL: Subject ${SUBJECT} not found (HTTP $HTTP_STATUS) — schema may not be registered yet"
+          exit 1
+        fi
+        echo "PASS: Avro schema subject ${SUBJECT} exists"
+
+    # ---------------------------------------------------------------
+    # Check 3: Kafka broker reachable on port 9093 via App Gateway (TCP)
+    # ---------------------------------------------------------------
+    - name: 'Check 3 — Kafka broker TCP reachable via App Gateway (:9093)'
       run: |
         echo "==> Checking TCP connectivity to $DOMAIN:9093 ..."
         if ! timeout 10 bash -c "echo > /dev/tcp/$DOMAIN/9093" 2>/dev/null; then
@@ -190,26 +207,27 @@ jobs:
         DOMAIN: ${{ steps.creds.outputs.domain }}
 
     # ---------------------------------------------------------------
-    # Check 4: Full Confluent produce + consume using standard settings
-    # Uses confluentinc/cp-schema-registry image with jaas.properties
-    # mounted — exactly as a Confluent client (e.g. Pega) would connect
+    # Check 4: Full Confluent Avro produce + consume via App Gateway
+    # Uses confluentinc/cp-schema-registry:7.6.0 (kafka-avro-console-producer/consumer)
+    # Broker: App Gateway port 9093 (SASL/OAUTHBEARER)
+    # Schema Registry: EH namespace Confluent-compatible endpoint (Bearer auth)
     # ---------------------------------------------------------------
-    - name: 'Check 4 — Produce + Consume Avro message (Confluent standard)'
+    - name: 'Check 4 — Produce + Consume Avro message (Confluent standard serializer)'
       run: |
         PROPS_FILE="${{ steps.creds.outputs.props_file }}"
-        echo "==> Using client.properties from Key Vault secret kafka-client-properties"
+        echo "==> Running Confluent Avro smoke test..."
         bash ../scripts/confluent-produce-consume-check.sh \
-          --props-file "$PROPS_FILE" \
-          --topic "orders.placed" \
-          --image "confluentinc/cp-schema-registry:7.6.0"
+          --props-file "$PROPS_FILE"
+
     - name: Summary
       if: always()
       run: |
-        echo "### Confluent Endpoint Check Results" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Check | Endpoint |" >> $GITHUB_STEP_SUMMARY
-        echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-        echo "| Schema Registry (HTTPS) | https://${{ steps.creds.outputs.domain }}/subjects |" >> $GITHUB_STEP_SUMMARY
-        echo "| Schema subject | \`orders.placed-value\` (TopicNameStrategy) |" >> $GITHUB_STEP_SUMMARY
-        echo "| Kafka broker (TCP) | \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| Produce + Consume (Avro) | topic \`orders.placed\` via Confluent \`cp-schema-registry:7.6.0\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "### Confluent Endpoint Check Results" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Check | Endpoint |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "|---|---|" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| TLS Certificate (App GW) | \`${{ steps.creds.outputs.domain }}:443\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Schema Registry (Confluent /subjects) | \`${{ steps.creds.outputs.sr_url }}/subjects\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Avro schema subject | \`orders.placed-value\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Kafka broker (TCP via App GW) | \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Produce + Consume (Confluent Avro) | topic \`orders.placed\` |" >> $GITHUB_STEP_SUMMARY
