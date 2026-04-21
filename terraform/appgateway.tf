@@ -79,6 +79,23 @@ resource "azurerm_application_gateway" "network" {
     port                  = 8081
     protocol              = "Http"
     request_timeout       = 60
+    probe_name            = "sr-probe"
+  }
+
+  # Custom health probe for Confluent SR backend.
+  # Confluent Schema Registry health is validated via /subjects.
+  probe {
+    name                                      = "sr-probe"
+    protocol                                  = "Http"
+    path                                      = "/subjects"
+    interval                                  = 30
+    timeout                                   = 30
+    unhealthy_threshold                       = 3
+    pick_host_name_from_backend_http_settings = true
+
+    match {
+      status_code = ["200-399"]
+    }
   }
 
   # L7 Settings (HTTPS)
