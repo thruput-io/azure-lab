@@ -10,7 +10,6 @@ on:
 permissions:
   id-token: write
   contents: read
-  secrets: write
 
 jobs:
   terraform:
@@ -124,7 +123,7 @@ jobs:
         printf '%s' "$SECRET_VALUE" | gh secret set KAFKA_CLIENT_PROPERTIES
         echo "KAFKA_CLIENT_PROPERTIES secret updated in GitHub Actions"
       env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GH_PAT }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
