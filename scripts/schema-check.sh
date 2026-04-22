@@ -128,7 +128,6 @@ sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.s
 sasl.oauthbearer.token.endpoint.url=${TOKEN_ENDPOINT}
 sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId="${CLIENT_ID}" clientSecret="${CLIENT_SECRET}" scope="https://eventhubs.azure.net/.default";
 schema.registry.url=${SR_URL}
-basic.auth.credentials.source=SASL_INHERIT
 EOF
 )
 
@@ -171,7 +170,7 @@ CONSUMED=$(docker run --rm \
     --from-beginning \
     --max-messages 1 \
     --timeout-ms 45000 \
-  2>/dev/null | grep -v "^Processed\|^$" | tail -1)
+  | grep -v "^Processed\|^$" | tail -1)
 
 rm -f "$CONFLUENT_PROPS_FILE"
 
