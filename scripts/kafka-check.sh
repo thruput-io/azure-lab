@@ -22,7 +22,7 @@
 set -euo pipefail
 
 PROPS_FILE=""
-KCAT_IMAGE="confluentinc/cp-kcat:7.9.0"
+KCAT_IMAGE="edenhill/kcat:1.7.1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -90,6 +90,7 @@ cat > "$KCAT_CONF" <<EOF
 metadata.broker.list=${BOOTSTRAP}
 security.protocol=sasl_ssl
 sasl.mechanisms=OAUTHBEARER
+sasl.oauthbearer.method=oidc
 sasl.oauthbearer.client.id=${CLIENT_ID}
 sasl.oauthbearer.client.secret=${CLIENT_SECRET}
 sasl.oauthbearer.token.endpoint.url=${TOKEN_URL}
