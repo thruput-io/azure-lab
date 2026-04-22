@@ -13,9 +13,11 @@ jobs:
 
     steps:
     - name: Write client.properties from secret
+      env:
+        KAFKA_CLIENT_PROPERTIES: ${{ secrets.KAFKA_CLIENT_PROPERTIES }}
       run: |
         set -euo pipefail
-        printf '%s' "${{ secrets.KAFKA_CLIENT_PROPERTIES }}" > client.properties
+        printf '%s' "$KAFKA_CLIENT_PROPERTIES" > client.properties
 
         if [ ! -s client.properties ]; then
           echo "ERROR: KAFKA_CLIENT_PROPERTIES secret is empty."
