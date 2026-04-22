@@ -48,6 +48,37 @@ done
 BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 TOPIC=$(grep '^checks_topic='       "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 
+# Normalize JAAS config: ensure key=value pairs in sasl.jaas.config have quoted values.
+# Key Vault TSV output can strip double-quotes from the rendered template, breaking JAAS parsing.
+# Uses awk to selectively quote clientId, clientSecret, scope values on the jaas.config line.
+FIXED_PROPS="/tmp/client-fixed-$$.properties"
+awk '
+/^sasl\.jaas\.config=/ {
+    # For each key=value token, quote values that are not already quoted
+    n = split($0, parts, " ")
+    for (i = 1; i <= n; i++) {
+        if (match(parts[i], /^(clientId|clientSecret|scope)=/) && \
+            substr(parts[i], RLENGTH+1, 1) != "\"") {
+            # Split on first = sign
+            eq = index(parts[i], "=")
+            k = substr(parts[i], 1, eq)
+            v = substr(parts[i], eq+1)
+            # Remove trailing ; if present
+            hasSemi = (substr(v, length(v)) == ";")
+            if (hasSemi) v = substr(v, 1, length(v)-1)
+            parts[i] = k "\"" v "\"" (hasSemi ? ";" : "")
+        }
+    }
+    # Rejoin
+    line = parts[1]
+    for (i = 2; i <= n; i++) line = line " " parts[i]
+    print line
+    next
+}
+{ print }
+' "$PROPS_FILE" > "$FIXED_PROPS"
+PROPS_FILE="$FIXED_PROPS"
+
 # Unique consumer group per run so --from-beginning always works
 GROUP="kafka-check-$(date -u +%Y%m%d%H%M%S)-$$"
 MSG='{"check":"kafka-check","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
