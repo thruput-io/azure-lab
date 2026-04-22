@@ -54,9 +54,10 @@ resource "azurerm_key_vault_secret" "kafka_client_properties" {
     "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"${azuread_application.kafka_client.client_id}\" clientSecret=\"${azuread_application_password.kafka_client_secret.value}\" scope=\"https://eventhubs.azure.net/.default\";",
     "",
     "# ============================================================",
-    "# Topic",
+    "# Topics",
     "# ============================================================",
     "topic=${azurerm_eventhub.orders_topic.name}",
+    "checks_topic=${azurerm_eventhub.checks_topic.name}",
   ])
 
   depends_on = [azurerm_role_assignment.deployer_kv_secrets_officer]

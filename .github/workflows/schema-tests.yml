@@ -41,38 +41,54 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
-    - name: Resolve credentials
+    # ---------------------------------------------------------------
+    # Download client.properties from Key Vault and parse all values
+    # — bootstrap, topics, OAuth settings, and SR endpoint all come
+    # from the file (SR lives on the same domain as bootstrap server)
+    # ---------------------------------------------------------------
+    - name: Load client.properties
       id: creds
       run: |
         set -euo pipefail
-        BOOTSTRAP=$(terraform output -raw kafka_bootstrap_server)
-        DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
-        if [ -z "$DOMAIN" ]; then
-          echo "ERROR: Failed to resolve domain from terraform output kafka_bootstrap_server"
+        KV_NAME="$(terraform output -raw key_vault_name)"
+        if [ -z "$KV_NAME" ]; then
+          echo "ERROR: terraform output key_vault_name is empty"
           exit 1
         fi
-        SR_ENDPOINT=$(terraform output -raw schema_registry_endpoint)
-        ORDERS_TOPIC=$(terraform output -raw orders_topic)
-        KV_NAME=$(terraform output -raw key_vault_name)
-        CLIENT_PROPS=$(az keyvault secret show \
+
+        PROPS_FILE="/tmp/client.properties"
+        az keyvault secret show \
           --vault-name "$KV_NAME" \
           --name kafka-client-properties \
-          --query value -o tsv)
-        PROPS_FILE="/tmp/client.properties"
-        printf '%s\n' "$CLIENT_PROPS" > "$PROPS_FILE"
+          --query value -o tsv > "$PROPS_FILE"
         sed -i 's/\r$//' "$PROPS_FILE"
+
         if [ ! -s "$PROPS_FILE" ]; then
-          echo "ERROR: Retrieved kafka-client-properties is empty"
+          echo "ERROR: client.properties downloaded from Key Vault is empty"
           exit 1
         fi
         if ! grep -q '^bootstrap.servers=' "$PROPS_FILE"; then
           echo "ERROR: client.properties is missing bootstrap.servers"
           exit 1
         fi
+
+        BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
+        DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
+        ORDERS_TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2-)
+
+        if [ -z "$ORDERS_TOPIC" ]; then
+          echo "ERROR: client.properties is missing topic"
+          exit 1
+        fi
+
+        # Schema Registry lives behind the same Application Gateway on :443
+        SR_ENDPOINT="https://$DOMAIN"
+
         echo "domain=$DOMAIN"             >> $GITHUB_OUTPUT
+        echo "props_file=$PROPS_FILE"     >> $GITHUB_OUTPUT
         echo "sr_endpoint=$SR_ENDPOINT"   >> $GITHUB_OUTPUT
         echo "orders_topic=$ORDERS_TOPIC" >> $GITHUB_OUTPUT
-        echo "props_file=$PROPS_FILE"     >> $GITHUB_OUTPUT
+        echo "Loaded client.properties: bootstrap=$BOOTSTRAP orders_topic=$ORDERS_TOPIC sr=$SR_ENDPOINT"
       env:
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -116,6 +132,7 @@ jobs:
           exit 1
         fi
         echo "PASS: :9093 TLS handshake successful"
+      working-directory: .
 
     # ---------------------------------------------------------------
     # Check 2 — Authentication
@@ -150,7 +167,7 @@ jobs:
 
         echo "==> [2b] Kafka broker auth via confluent-kafka AdminClient ..."
         python3 << PYEOF
-        import sys
+        import sys, re
         from confluent_kafka.admin import AdminClient
 
         with open("$PROPS_FILE") as f:
@@ -161,8 +178,7 @@ jobs:
                     k, _, v = line.partition("=")
                     props[k.strip()] = v.strip()
 
-        import re
-        jaas = props["sasl.jaas.config"]
+        jaas          = props["sasl.jaas.config"]
         client_id     = re.search(r'clientId="([^"]+)"',     jaas).group(1)
         client_secret = re.search(r'clientSecret="([^"]+)"', jaas).group(1)
 
@@ -196,7 +212,7 @@ jobs:
                     k, _, v = line.partition("=")
                     props[k.strip()] = v.strip()
 
-        jaas = props["sasl.jaas.config"]
+        jaas          = props["sasl.jaas.config"]
         client_id     = re.search(r'clientId="([^"]+)"',     jaas).group(1)
         client_secret = re.search(r'clientSecret="([^"]+)"', jaas).group(1)
         tenant_id     = re.search(r'/([^/]+)/oauth2', props["sasl.oauthbearer.token.endpoint.url"]).group(1)
@@ -221,9 +237,9 @@ jobs:
         python3 << 'PYEOF'
         import os, sys, time, json, re
 
-        props_file  = os.environ["PROPS_FILE"]
-        topic       = os.environ["ORDERS_TOPIC"]
-        sr_endpoint = os.environ["SR_ENDPOINT"]
+        props_file   = os.environ["PROPS_FILE"]
+        topic        = os.environ["ORDERS_TOPIC"]
+        sr_endpoint  = os.environ["SR_ENDPOINT"]
         schema_group = "orders-schema-group"
 
         # Parse client.properties
@@ -286,7 +302,7 @@ jobs:
         # ── Produce ──────────────────────────────────────────────────
         from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
 
-        payload = {"order_id": "avro-full-test-001", "product": "test-widget", "quantity": 1, "timestamp": int(time.time() * 1000)}
+        payload = {"order_id": "schema-test-001", "product": "test-widget", "quantity": 1, "timestamp": int(time.time() * 1000)}
         encoded_bytes = bytes(encoder.encode(payload, schema_format="Avro"))
 
         producer  = Producer(kafka_conf)
@@ -308,7 +324,7 @@ jobs:
         # ── Consume ──────────────────────────────────────────────────
         consumer_conf = {
             **kafka_conf,
-            "group.id":           f"avro-full-test-{int(time.time())}",
+            "group.id":           f"schema-tests-{int(time.time())}",
             "auto.offset.reset":  "latest",
             "session.timeout.ms": 30000,
         }
@@ -348,7 +364,7 @@ jobs:
     - name: Summary
       if: always()
       run: |
-        printf '%s\n' "### Avro Full Test Results" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "### Schema Tests Results" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| # | Check | Target |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "|---|---|---|" >> $GITHUB_STEP_SUMMARY
