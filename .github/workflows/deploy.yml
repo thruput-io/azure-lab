@@ -60,6 +60,37 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
+    - name: Remove stale App Gateway objects (Confluent SR leftovers)
+      if: github.ref == 'refs/heads/main'
+      working-directory: ./terraform
+      run: |
+        set -euo pipefail
+        RG="rg-eventhub-appgw-lab"
+        GW="appgw-eventhub-lab"
+
+        # Remove stale probe if it exists
+        if az network application-gateway probe show -g "$RG" --gateway-name "$GW" --name sr-probe &>/dev/null; then
+          echo "Removing stale probe sr-probe..."
+          az network application-gateway probe delete -g "$RG" --gateway-name "$GW" --name sr-probe --no-wait false
+          echo "Probe removed."
+        else
+          echo "Probe sr-probe not found, nothing to remove."
+        fi
+
+        # Remove stale backend http settings if they exist
+        if az network application-gateway http-settings show -g "$RG" --gateway-name "$GW" --name sr-be-htst &>/dev/null; then
+          echo "Removing stale backend-http-settings sr-be-htst..."
+          az network application-gateway http-settings delete -g "$RG" --gateway-name "$GW" --name sr-be-htst --no-wait false
+          echo "Backend settings removed."
+        else
+          echo "Backend settings sr-be-htst not found, nothing to remove."
+        fi
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
     - name: Terraform Apply
       if: github.ref == 'refs/heads/main'
       run: terraform apply -auto-approve -input=false
