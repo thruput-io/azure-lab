@@ -13,10 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
 
-    defaults:
-      run:
-        working-directory: ./terraform
-
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -28,33 +24,24 @@ jobs:
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v4
-      with:
-        terraform_wrapper: false
-
-    - name: Terraform Init
-      run: terraform init -input=false
-      env:
-        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        ARM_USE_OIDC: true
-
     # ---------------------------------------------------------------
-    # Download client.properties from Key Vault and parse all values
-    # — bootstrap, topics, OAuth settings, and SR endpoint all come
-    # from the file (SR lives on the same domain as bootstrap server)
+    # Download client.properties from Key Vault.
+    # All values (bootstrap, topic, OAuth) come from this file.
+    # SR endpoint is derived from the bootstrap domain on :443.
+    # No Terraform required — KV is looked up by resource group.
     # ---------------------------------------------------------------
     - name: Load client.properties
       id: creds
       run: |
         set -euo pipefail
-        KV_NAME="$(terraform output -raw key_vault_name)"
+        KV_NAME=$(az keyvault list \
+          --resource-group rg-eventhub-appgw-lab \
+          --query "[0].name" -o tsv)
         if [ -z "$KV_NAME" ]; then
-          echo "ERROR: terraform output key_vault_name is empty"
+          echo "ERROR: Could not find a Key Vault in rg-eventhub-appgw-lab"
           exit 1
         fi
+        echo "Using Key Vault: $KV_NAME"
 
         PROPS_FILE="/tmp/client.properties"
         az keyvault secret show \
@@ -71,37 +58,29 @@ jobs:
           echo "ERROR: client.properties is missing bootstrap.servers"
           exit 1
         fi
-
-        BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
-        DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
-        ORDERS_TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2-)
-
-        if [ -z "$ORDERS_TOPIC" ]; then
+        if ! grep -q '^topic=' "$PROPS_FILE"; then
           echo "ERROR: client.properties is missing topic"
           exit 1
         fi
 
-        # Schema Registry lives behind the same Application Gateway on :443
+        BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
+        DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
+        ORDERS_TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2-)
         SR_ENDPOINT="https://$DOMAIN"
 
         echo "domain=$DOMAIN"             >> $GITHUB_OUTPUT
+        echo "bootstrap=$BOOTSTRAP"       >> $GITHUB_OUTPUT
         echo "props_file=$PROPS_FILE"     >> $GITHUB_OUTPUT
         echo "sr_endpoint=$SR_ENDPOINT"   >> $GITHUB_OUTPUT
         echo "orders_topic=$ORDERS_TOPIC" >> $GITHUB_OUTPUT
-        echo "Loaded client.properties: bootstrap=$BOOTSTRAP orders_topic=$ORDERS_TOPIC sr=$SR_ENDPOINT"
-      env:
-        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        ARM_USE_OIDC: true
+        echo "Loaded: bootstrap=$BOOTSTRAP  topic=$ORDERS_TOPIC  sr=$SR_ENDPOINT"
 
     - name: Install Python dependencies
       run: pip install --quiet confluent-kafka azure-schemaregistry azure-schemaregistry-avroencoder azure-identity fastavro
-      working-directory: .
 
     # ---------------------------------------------------------------
     # Check 1 — Connectivity + SSL
-    # TLS handshake on :443 (HTTPS), TLS handshake on :9093 (Kafka)
+    # TLS handshake on :443 (HTTPS) and :9093 (Kafka)
     # ---------------------------------------------------------------
     - name: 'Check 1 — Connectivity + SSL'
       id: check1
@@ -116,29 +95,28 @@ jobs:
           exit 1
         fi
         EXPIRY=$(echo "$CERT_RESULT" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
-        EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$EXPIRY" +%s 2>/dev/null)
+        EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
         DAYS_LEFT=$(( (EXPIRY_EPOCH - $(date +%s)) / 86400 ))
         echo "  Certificate expires in $DAYS_LEFT days ($EXPIRY)"
         if [ "$DAYS_LEFT" -lt 7 ]; then
           echo "FAIL: Certificate expires in $DAYS_LEFT days — renew immediately"
           exit 1
         fi
-        echo "PASS: :443 TLS certificate valid, $DAYS_LEFT days remaining"
+        echo "PASS: :443 TLS certificate valid ($DAYS_LEFT days remaining)"
 
         echo "==> [1b] TLS handshake on ${DOMAIN}:9093 (Kafka) ..."
-        KAFKA_TLS=$(echo | openssl s_client -connect "${DOMAIN}:9093" -servername "$DOMAIN" 2>/dev/null)
-        if ! echo "$KAFKA_TLS" | grep -q "Verify return code: 0 (ok)"; then
+        if ! echo | openssl s_client -connect "${DOMAIN}:9093" -servername "$DOMAIN" 2>/dev/null \
+            | grep -q "Verify return code: 0 (ok)"; then
           echo "FAIL: TLS certificate verification failed on :9093"
           exit 1
         fi
         echo "PASS: :9093 TLS handshake successful"
-      working-directory: .
 
     # ---------------------------------------------------------------
     # Check 2 — Authentication
-    # 2a: Entra ID OAuth token fetch (raw HTTP, proves IdP reachable)
-    # 2b: confluent-kafka AdminClient metadata (proves Kafka auth works)
-    # 2c: Azure Schema Registry credential (proves SR auth works)
+    # 2a: Entra ID OAuth token (raw HTTP)
+    # 2b: Kafka broker auth via confluent-kafka AdminClient
+    # 2c: Azure Schema Registry credential
     # ---------------------------------------------------------------
     - name: 'Check 2 — Authentication (OAuth + Kafka + Schema Registry)'
       id: check2
@@ -220,15 +198,14 @@ jobs:
 
         credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
         sr_client  = SchemaRegistryClient(fully_qualified_namespace=sr_ns, credential=credential)
-        schemas = list(sr_client.list_schema_groups())
+        schemas    = list(sr_client.list_schema_groups())
         print(f"PASS: Schema Registry auth OK — groups={schemas}")
         PYEOF
-      working-directory: .
 
     # ---------------------------------------------------------------
     # Check 3 — Avro Produce + Consume
-    # Register schema, encode + produce, consume + decode
-    # All using official Confluent libs + Azure SR
+    # Register Avro schema, encode + produce, consume + decode.
+    # Uses official confluent-kafka + azure-schemaregistry Python libs.
     # ---------------------------------------------------------------
     - name: 'Check 3 — Avro Produce + Consume'
       id: check3
@@ -242,7 +219,6 @@ jobs:
         sr_endpoint  = os.environ["SR_ENDPOINT"]
         schema_group = "orders-schema-group"
 
-        # Parse client.properties
         props = {}
         with open(props_file) as f:
             for line in f:
@@ -260,7 +236,6 @@ jobs:
         print(f"sr_endpoint: {sr_endpoint}")
         print(f"topic      : {topic}")
 
-        # ── Avro schema ─────────────────────────────────────────────
         SCHEMA_NAME = "OrderPlaced"
         SCHEMA_DEF  = json.dumps({
             "type": "record", "name": "OrderPlaced", "namespace": "io.thruput.orders",
@@ -272,21 +247,19 @@ jobs:
             ]
         })
 
-        # ── Azure Schema Registry (official azure-schemaregistry lib) ─
         from azure.identity import ClientSecretCredential
         from azure.schemaregistry import SchemaRegistryClient
         from azure.schemaregistry.encoder.avroencoder import AvroEncoder
 
-        credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
-        sr_client  = SchemaRegistryClient(fully_qualified_namespace=sr_endpoint.removeprefix("https://"), credential=credential)
+        credential   = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
+        sr_client    = SchemaRegistryClient(fully_qualified_namespace=sr_endpoint.removeprefix("https://"), credential=credential)
 
         print(f"==> Registering schema '{SCHEMA_NAME}' in '{schema_group}' ...")
-        schema_props = sr_client.register_schema(group_name=schema_group, name=SCHEMA_NAME, definition=SCHEMA_DEF, format="Avro")
-        print(f"PASS: Schema registered — id={schema_props.id}")
+        sp = sr_client.register_schema(group_name=schema_group, name=SCHEMA_NAME, definition=SCHEMA_DEF, format="Avro")
+        print(f"PASS: Schema registered — id={sp.id}")
 
         encoder = AvroEncoder(client=sr_client, group_name=schema_group, auto_register=True)
 
-        # ── Kafka config (official confluent-kafka / librdkafka keys) ─
         kafka_conf = {
             "bootstrap.servers":                   props["bootstrap.servers"],
             "security.protocol":                   "SASL_SSL",
@@ -299,10 +272,9 @@ jobs:
             "enable.ssl.certificate.verification": True,
         }
 
-        # ── Produce ──────────────────────────────────────────────────
         from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
 
-        payload = {"order_id": "schema-test-001", "product": "test-widget", "quantity": 1, "timestamp": int(time.time() * 1000)}
+        payload       = {"order_id": "schema-test-001", "product": "test-widget", "quantity": 1, "timestamp": int(time.time() * 1000)}
         encoded_bytes = bytes(encoder.encode(payload, schema_format="Avro"))
 
         producer  = Producer(kafka_conf)
@@ -321,7 +293,6 @@ jobs:
             print(f"FAIL: Delivery failed — {delivered['err']}")
             sys.exit(1)
 
-        # ── Consume ──────────────────────────────────────────────────
         consumer_conf = {
             **kafka_conf,
             "group.id":           f"schema-tests-{int(time.time())}",
@@ -347,7 +318,6 @@ jobs:
             print(f"FAIL: No message consumed from '{topic}' within timeout")
             sys.exit(1)
 
-        # ── Decode ───────────────────────────────────────────────────
         decoded = encoder.decode(consumed.value())
         print(f"Decoded  : {decoded}")
         print(f"PASS: Avro produce + consume round-trip successful on '{topic}'")
@@ -356,7 +326,6 @@ jobs:
         PROPS_FILE:   ${{ steps.creds.outputs.props_file }}
         ORDERS_TOPIC: ${{ steps.creds.outputs.orders_topic }}
         SR_ENDPOINT:  ${{ steps.creds.outputs.sr_endpoint }}
-      working-directory: .
 
     # ---------------------------------------------------------------
     # Summary
@@ -371,4 +340,3 @@ jobs:
         printf '%s\n' "| 1 | Connectivity + SSL | \`:443\` TLS cert + \`:9093\` TLS handshake |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| 2 | Authentication | OAuth token + Kafka AdminClient + Schema Registry credential |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| 3 | Avro Produce + Consume | topic \`${{ steps.creds.outputs.orders_topic }}\` via \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
-      working-directory: .

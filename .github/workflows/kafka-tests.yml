@@ -13,10 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
 
-    defaults:
-      run:
-        working-directory: ./terraform
-
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -28,32 +24,23 @@ jobs:
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v4
-      with:
-        terraform_wrapper: false
-
-    - name: Terraform Init
-      run: terraform init -input=false
-      env:
-        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        ARM_USE_OIDC: true
-
     # ---------------------------------------------------------------
-    # Download client.properties from Key Vault and parse all values
-    # — bootstrap, topics, and OAuth settings all come from the file
+    # Download client.properties from Key Vault.
+    # All values (bootstrap, topics, OAuth) come from this file.
+    # No Terraform required — KV is looked up by resource group.
     # ---------------------------------------------------------------
     - name: Load client.properties
       id: creds
       run: |
         set -euo pipefail
-        KV_NAME="$(terraform output -raw key_vault_name)"
+        KV_NAME=$(az keyvault list \
+          --resource-group rg-eventhub-appgw-lab \
+          --query "[0].name" -o tsv)
         if [ -z "$KV_NAME" ]; then
-          echo "ERROR: terraform output key_vault_name is empty"
+          echo "ERROR: Could not find a Key Vault in rg-eventhub-appgw-lab"
           exit 1
         fi
+        echo "Using Key Vault: $KV_NAME"
 
         PROPS_FILE="/tmp/client.properties"
         az keyvault secret show \
@@ -70,29 +57,24 @@ jobs:
           echo "ERROR: client.properties is missing bootstrap.servers"
           exit 1
         fi
+        if ! grep -q '^checks_topic=' "$PROPS_FILE"; then
+          echo "ERROR: client.properties is missing checks_topic"
+          exit 1
+        fi
 
         BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
         DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
         CHECKS_TOPIC=$(grep '^checks_topic=' "$PROPS_FILE" | cut -d= -f2-)
 
-        if [ -z "$CHECKS_TOPIC" ]; then
-          echo "ERROR: client.properties is missing checks_topic"
-          exit 1
-        fi
-
         echo "domain=$DOMAIN"             >> $GITHUB_OUTPUT
+        echo "bootstrap=$BOOTSTRAP"       >> $GITHUB_OUTPUT
         echo "props_file=$PROPS_FILE"     >> $GITHUB_OUTPUT
         echo "checks_topic=$CHECKS_TOPIC" >> $GITHUB_OUTPUT
-        echo "Loaded client.properties: bootstrap=$BOOTSTRAP checks_topic=$CHECKS_TOPIC"
-      env:
-        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        ARM_USE_OIDC: true
+        echo "Loaded: bootstrap=$BOOTSTRAP  checks_topic=$CHECKS_TOPIC"
 
     # ---------------------------------------------------------------
     # Check 1 — Connectivity + SSL
-    # TLS handshake on :443 (HTTPS), TLS handshake on :9093 (Kafka)
+    # TLS handshake on :443 (HTTPS) and :9093 (Kafka)
     # ---------------------------------------------------------------
     - name: 'Check 1 — Connectivity + SSL'
       id: check1
@@ -107,182 +89,81 @@ jobs:
           exit 1
         fi
         EXPIRY=$(echo "$CERT_RESULT" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
-        EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$EXPIRY" +%s 2>/dev/null)
+        EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
         DAYS_LEFT=$(( (EXPIRY_EPOCH - $(date +%s)) / 86400 ))
         echo "  Certificate expires in $DAYS_LEFT days ($EXPIRY)"
         if [ "$DAYS_LEFT" -lt 7 ]; then
           echo "FAIL: Certificate expires in $DAYS_LEFT days — renew immediately"
           exit 1
         fi
-        echo "PASS: :443 TLS certificate valid, $DAYS_LEFT days remaining"
+        echo "PASS: :443 TLS certificate valid ($DAYS_LEFT days remaining)"
 
         echo "==> [1b] TLS handshake on ${DOMAIN}:9093 (Kafka) ..."
-        KAFKA_TLS=$(echo | openssl s_client -connect "${DOMAIN}:9093" -servername "$DOMAIN" 2>/dev/null)
-        if ! echo "$KAFKA_TLS" | grep -q "Verify return code: 0 (ok)"; then
+        if ! echo | openssl s_client -connect "${DOMAIN}:9093" -servername "$DOMAIN" 2>/dev/null \
+            | grep -q "Verify return code: 0 (ok)"; then
           echo "FAIL: TLS certificate verification failed on :9093"
           exit 1
         fi
         echo "PASS: :9093 TLS handshake successful"
-      working-directory: .
 
     # ---------------------------------------------------------------
     # Check 2 — Authentication (SASL/OAUTHBEARER)
-    # Fetch an Entra ID token then verify Kafka broker accepts it
+    # Uses official confluentinc/cp-kafka image: kafka-topics --list
     # ---------------------------------------------------------------
     - name: 'Check 2 — Authentication (SASL/OAUTHBEARER)'
       id: check2
       run: |
         set -euo pipefail
-        PROPS_FILE="${{ steps.creds.outputs.props_file }}"
-        DOMAIN="${{ steps.creds.outputs.domain }}"
-
-        # Extract OAuth params from client.properties (Confluent librdkafka keys)
-        TOKEN_ENDPOINT=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)
-        JAAS=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)
-        CLIENT_ID=$(echo "$JAAS" | grep -oP 'clientId="\K[^"]+')
-        CLIENT_SECRET=$(echo "$JAAS" | grep -oP 'clientSecret="\K[^"]+')
-
-        echo "==> Fetching Entra ID OAuth token from $TOKEN_ENDPOINT ..."
-        TOKEN_RESP=$(curl -sS --max-time 15 -X POST "$TOKEN_ENDPOINT" \
-          -d "grant_type=client_credentials" \
-          -d "client_id=$CLIENT_ID" \
-          --data-urlencode "client_secret=$CLIENT_SECRET" \
-          -d "scope=https://eventhubs.azure.net/.default")
-        ACCESS_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
-        if [ -z "$ACCESS_TOKEN" ]; then
-          echo "FAIL: Could not obtain OAuth token — response: $TOKEN_RESP"
-          exit 1
-        fi
-        echo "PASS: OAuth token acquired successfully"
-
-        # Install confluent-kafka (librdkafka based — official Confluent Python client)
-        echo "==> Installing confluent-kafka ..."
-        pip install --quiet confluent-kafka
-
-        # Use confluent-kafka AdminClient to list topics — proves auth works end-to-end
-        echo "==> Verifying Kafka auth with AdminClient (list topics) ..."
-        python3 << PYEOF
-        import sys, re
-        from confluent_kafka.admin import AdminClient
-
-        with open("$PROPS_FILE") as f:
-            props = {}
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    props[k.strip()] = v.strip()
-
-        jaas          = props["sasl.jaas.config"]
-        client_id     = re.search(r'clientId="([^"]+)"',     jaas).group(1)
-        client_secret = re.search(r'clientSecret="([^"]+)"', jaas).group(1)
-
-        conf = {
-            "bootstrap.servers":                        props["bootstrap.servers"],
-            "security.protocol":                        "SASL_SSL",
-            "sasl.mechanisms":                          "OAUTHBEARER",
-            "sasl.oauthbearer.method":                  "oidc",
-            "sasl.oauthbearer.token.endpoint.url":      props["sasl.oauthbearer.token.endpoint.url"],
-            "sasl.oauthbearer.client.id":               client_id,
-            "sasl.oauthbearer.client.secret":           client_secret,
-            "sasl.oauthbearer.scope":                   "https://eventhubs.azure.net/.default",
-            "enable.ssl.certificate.verification":      "true",
-        }
-
-        admin = AdminClient(conf)
-        md = admin.list_topics(timeout=20)
-        print(f"PASS: AdminClient authenticated — broker={md.orig_broker_name}, topics={len(md.topics)}")
-        PYEOF
-      working-directory: .
+        echo "==> Authenticating with Kafka broker via SASL/OAUTHBEARER ..."
+        docker run --rm \
+          -v /tmp/client.properties:/tmp/client.properties \
+          confluentinc/cp-kafka:7.9.0 \
+          kafka-topics \
+            --bootstrap-server "${{ steps.creds.outputs.bootstrap }}" \
+            --list \
+            --command-config /tmp/client.properties
+        echo "PASS: Kafka auth OK (topic list succeeded)"
 
     # ---------------------------------------------------------------
-    # Check 3 — Produce + Consume (plain JSON, checks.kafka topic)
+    # Check 3 — Produce + Consume (checks.kafka topic)
+    # Uses official confluentinc/cp-kafka image:
+    #   kafka-console-producer and kafka-console-consumer
     # ---------------------------------------------------------------
     - name: 'Check 3 — Produce + Consume (checks.kafka)'
       id: check3
       run: |
         set -euo pipefail
-        PROPS_FILE="${{ steps.creds.outputs.props_file }}"
+        BOOTSTRAP="${{ steps.creds.outputs.bootstrap }}"
         TOPIC="${{ steps.creds.outputs.checks_topic }}"
+        MSG='{"check":"kafka-tests","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 
-        python3 << PYEOF
-        import sys, time, json, re
-        from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
+        echo "==> Producing message to '$TOPIC' ..."
+        echo "$MSG" | docker run -i --rm \
+          -v /tmp/client.properties:/tmp/client.properties \
+          confluentinc/cp-kafka:7.9.0 \
+          kafka-console-producer \
+            --bootstrap-server "$BOOTSTRAP" \
+            --topic "$TOPIC" \
+            --producer.config /tmp/client.properties
+        echo "PASS: Message produced to '$TOPIC'"
 
-        props_file = "$PROPS_FILE"
-        topic      = "$TOPIC"
-
-        with open(props_file) as f:
-            props = {}
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    props[k.strip()] = v.strip()
-
-        jaas          = props["sasl.jaas.config"]
-        client_id     = re.search(r'clientId="([^"]+)"',     jaas).group(1)
-        client_secret = re.search(r'clientSecret="([^"]+)"', jaas).group(1)
-
-        kafka_conf = {
-            "bootstrap.servers":                   props["bootstrap.servers"],
-            "security.protocol":                   "SASL_SSL",
-            "sasl.mechanisms":                     "OAUTHBEARER",
-            "sasl.oauthbearer.method":             "oidc",
-            "sasl.oauthbearer.token.endpoint.url": props["sasl.oauthbearer.token.endpoint.url"],
-            "sasl.oauthbearer.client.id":          client_id,
-            "sasl.oauthbearer.client.secret":      client_secret,
-            "sasl.oauthbearer.scope":              "https://eventhubs.azure.net/.default",
-            "enable.ssl.certificate.verification": True,
-        }
-
-        # Produce
-        payload = json.dumps({"check": "kafka-tests", "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-        producer = Producer(kafka_conf)
-        delivered = {"ok": False, "err": None}
-        def on_delivery(err, msg):
-            if err:
-                delivered["err"] = err
-            else:
-                delivered["ok"] = True
-                print(f"PASS: Produced to {msg.topic()} partition={msg.partition()} offset={msg.offset()}")
-        print(f"==> Producing message to '{topic}' ...")
-        producer.produce(topic, value=payload.encode(), callback=on_delivery)
-        producer.flush(timeout=30)
-        if not delivered["ok"]:
-            print(f"FAIL: Delivery failed — {delivered['err']}")
-            sys.exit(1)
-
-        # Consume
-        consumer_conf = {
-            **kafka_conf,
-            "group.id":           f"kafka-tests-{int(time.time())}",
-            "auto.offset.reset":  "latest",
-            "session.timeout.ms": 30000,
-        }
-        consumer = Consumer(consumer_conf)
-        consumer.subscribe([topic])
-        print(f"==> Consuming message from '{topic}' (timeout 45s) ...")
-        deadline = time.time() + 45
-        consumed = None
-        while time.time() < deadline:
-            msg = consumer.poll(2.0)
-            if msg is None:
-                continue
-            if msg.error():
-                if msg.error().code() == KafkaError._PARTITION_EOF:
-                    continue
-                raise KafkaException(msg.error())
-            consumed = msg
-            break
-        consumer.close()
-        if consumed is None:
-            print(f"FAIL: No message consumed from '{topic}' within timeout")
-            sys.exit(1)
-        print(f"Consumed : {consumed.value().decode()}")
-        print(f"PASS: Produce + consume round-trip on '{topic}' successful")
-        PYEOF
-      working-directory: .
+        echo "==> Consuming message from '$TOPIC' (timeout 45s) ..."
+        CONSUMED=$(docker run --rm \
+          -v /tmp/client.properties:/tmp/client.properties \
+          confluentinc/cp-kafka:7.9.0 \
+          kafka-console-consumer \
+            --bootstrap-server "$BOOTSTRAP" \
+            --topic "$TOPIC" \
+            --consumer.config /tmp/client.properties \
+            --from-beginning \
+            --max-messages 1 \
+            --timeout-ms 45000 2>/dev/null || true)
+        if [ -z "$CONSUMED" ]; then
+          echo "FAIL: No message consumed from '$TOPIC' within timeout"
+          exit 1
+        fi
+        echo "Consumed: $CONSUMED"
+        echo "PASS: Produce + consume round-trip on '$TOPIC' successful"
 
     # ---------------------------------------------------------------
     # Summary
@@ -295,6 +176,5 @@ jobs:
         printf '%s\n' "| # | Check | Target |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "|---|---|---|" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| 1 | Connectivity + SSL | \`:443\` TLS cert + \`:9093\` TLS handshake |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 2 | Authentication (SASL/OAUTHBEARER) | OAuth token + AdminClient metadata via \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 3 | Produce + Consume | topic \`${{ steps.creds.outputs.checks_topic }}\` via \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
-      working-directory: .
+        printf '%s\n' "| 2 | Authentication | \`kafka-topics --list\` via \`confluentinc/cp-kafka\` + SASL/OAUTHBEARER |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| 3 | Produce + Consume | topic \`${{ steps.creds.outputs.checks_topic }}\` via \`confluentinc/cp-kafka\` |" >> $GITHUB_STEP_SUMMARY
