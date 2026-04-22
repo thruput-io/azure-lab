@@ -1,4 +1,4 @@
-name: 'Avro Full Test (Confluent SerDes + Azure EH Schema Registry)'
+name: 'Schema Tests (Avro + Azure EH Schema Registry)'
 
 on:
   workflow_dispatch:
@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  avro-full-test:
-    name: 'Avro Full Test'
+  schema-tests:
+    name: 'Schema Tests'
     runs-on: ubuntu-latest
     environment: production
 
