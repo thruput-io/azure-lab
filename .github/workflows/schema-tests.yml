@@ -21,7 +21,6 @@ jobs:
     # The secret KAFKA_CLIENT_PROPERTIES holds the full file content
     # (populated credentials — do NOT commit to git).
     # All values (bootstrap, topic, OAuth) come from this file.
-    # SR endpoint is derived from the bootstrap domain on :443.
     # No Azure login or Key Vault call is needed.
     # ---------------------------------------------------------------
     - name: Load client.properties
@@ -51,9 +50,6 @@ jobs:
         echo "domain=$DOMAIN"         >> $GITHUB_OUTPUT
         echo "props_file=$PROPS_FILE" >> $GITHUB_OUTPUT
         echo "Loaded: bootstrap=$BOOTSTRAP"
-
-    - name: Install Python dependencies
-      run: pip install --quiet confluent-kafka azure-schemaregistry azure-schemaregistry-avroencoder azure-identity fastavro
 
     # ---------------------------------------------------------------
     # Check 1 — Connectivity + SSL
@@ -91,9 +87,9 @@ jobs:
 
     # ---------------------------------------------------------------
     # Check 2 — Authentication
-    # 2a: Entra ID OAuth token (raw HTTP)
-    # 2b: Kafka broker auth via confluent-kafka AdminClient
-    # 2c: Azure Schema Registry credential
+    # 2a: Entra ID OAuth token (curl)
+    # 2b: Kafka broker auth via confluentinc/cp-kafka kafka-topics
+    # 2c: Azure Schema Registry REST API auth (curl + bearer token)
     # ---------------------------------------------------------------
     - name: 'Check 2 — Authentication (OAuth + Kafka + Schema Registry)'
       id: check2
@@ -103,8 +99,11 @@ jobs:
 
         TOKEN_ENDPOINT=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)
         JAAS=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)
-        CLIENT_ID=$(echo "$JAAS" | grep -oP 'clientId="\K[^"]+')
+        CLIENT_ID=$(echo "$JAAS"     | grep -oP 'clientId="\K[^"]+')
         CLIENT_SECRET=$(echo "$JAAS" | grep -oP 'clientSecret="\K[^"]+')
+        BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
+        DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
+        SR_URL="https://${DOMAIN}"
 
         echo "==> [2a] Fetching Entra ID OAuth token ..."
         TOKEN_RESP=$(curl -sS --max-time 15 -X POST "$TOKEN_ENDPOINT" \
@@ -112,85 +111,46 @@ jobs:
           -d "client_id=$CLIENT_ID" \
           --data-urlencode "client_secret=$CLIENT_SECRET" \
           -d "scope=https://eventhubs.azure.net/.default")
-        ACCESS_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
+        ACCESS_TOKEN=$(echo "$TOKEN_RESP" | grep -oP '"access_token":\s*"\K[^"]+' || true)
         if [ -z "$ACCESS_TOKEN" ]; then
           echo "FAIL: Could not obtain OAuth token — response: $TOKEN_RESP"
           exit 1
         fi
         echo "PASS: OAuth token acquired"
 
-        echo "==> [2b] Kafka broker auth via confluent-kafka AdminClient ..."
-        python3 - "$PROPS_FILE" << 'PYEOF'
-        import sys, re
-        from confluent_kafka.admin import AdminClient
+        echo "==> [2b] Kafka broker auth via confluentinc/cp-kafka kafka-topics ..."
+        docker run --rm \
+          -v "$PROPS_FILE:/tmp/client.properties:ro" \
+          confluentinc/cp-kafka:7.9.0 \
+          kafka-topics \
+            --bootstrap-server "$BOOTSTRAP" \
+            --command-config /tmp/client.properties \
+            --list \
+          && echo "PASS: Kafka broker auth OK"
 
-        props_file = sys.argv[1]
-        with open(props_file) as f:
-            props = {}
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    props[k.strip()] = v.strip()
-
-        jaas          = props["sasl.jaas.config"]
-        client_id     = re.search(r'clientId="([^"]+)"',     jaas).group(1)
-        client_secret = re.search(r'clientSecret="([^"]+)"', jaas).group(1)
-
-        conf = {
-            "bootstrap.servers":                   props["bootstrap.servers"],
-            "security.protocol":                   "SASL_SSL",
-            "sasl.mechanisms":                     "OAUTHBEARER",
-            "sasl.oauthbearer.method":             "oidc",
-            "sasl.oauthbearer.token.endpoint.url": props["sasl.oauthbearer.token.endpoint.url"],
-            "sasl.oauthbearer.client.id":          client_id,
-            "sasl.oauthbearer.client.secret":      client_secret,
-            "sasl.oauthbearer.scope":              "https://eventhubs.azure.net/.default",
-            "enable.ssl.certificate.verification": "true",
-        }
-        admin = AdminClient(conf)
-        md = admin.list_topics(timeout=20)
-        print(f"PASS: Kafka auth OK — broker={md.orig_broker_name}, topics={len(md.topics)}")
-        PYEOF
-
-        echo "==> [2c] Azure Schema Registry credential check ..."
-        python3 - "$PROPS_FILE" << 'PYEOF'
-        import re, sys
-        from azure.identity import ClientSecretCredential
-        from azure.schemaregistry import SchemaRegistryClient
-
-        props_file = sys.argv[1]
-        with open(props_file) as f:
-            props = {}
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    props[k.strip()] = v.strip()
-
-        jaas          = props["sasl.jaas.config"]
-        client_id     = re.search(r'clientId="([^"]+)"',     jaas).group(1)
-        client_secret = re.search(r'clientSecret="([^"]+)"', jaas).group(1)
-        tenant_id     = re.search(r'/([^/]+)/oauth2', props["sasl.oauthbearer.token.endpoint.url"]).group(1)
-        domain        = props["bootstrap.servers"].split(":")[0]
-
-        credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
-        sr_client  = SchemaRegistryClient(fully_qualified_namespace=domain, credential=credential)
-        schemas    = list(sr_client.list_schema_groups())
-        print(f"PASS: Schema Registry auth OK — groups={schemas}")
-        PYEOF
+        echo "==> [2c] Azure Schema Registry REST API auth ..."
+        SR_RESP=$(curl -sS --max-time 15 \
+          -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+          "${SR_URL}/\$schemagroups")
+        if echo "$SR_RESP" | grep -q '"value"'; then
+          echo "PASS: Schema Registry auth OK — groups listed"
+        else
+          echo "FAIL: Schema Registry auth failed — response: $SR_RESP"
+          exit 1
+        fi
 
     # ---------------------------------------------------------------
-    # Check 3 — Avro Produce + Consume via scripts/schema-check.py
-    # Uses confluent-kafka + azure-schemaregistry-avroencoder.
+    # Check 3 — Avro Produce + Consume via scripts/schema-check.sh
+    # Uses official confluentinc/cp-schema-registry image.
     # Only input: client.properties
-    # Run locally: python3 scripts/schema-check.py --props-file client.properties
+    # Run locally: ./scripts/schema-check.sh --props-file client.properties
     # ---------------------------------------------------------------
-    - name: 'Check 3 — Avro Produce + Consume'
+    - name: 'Check 3 — Avro Produce + Consume (confluentinc/cp-schema-registry)'
       id: check3
       run: |
         set -euo pipefail
-        python3 scripts/schema-check.py --props-file "${{ steps.creds.outputs.props_file }}"
+        chmod +x scripts/schema-check.sh
+        scripts/schema-check.sh --props-file "${{ steps.creds.outputs.props_file }}"
 
     # ---------------------------------------------------------------
     # Summary
@@ -203,5 +163,5 @@ jobs:
         printf '%s\n' "| # | Check | Target |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "|---|---|---|" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| 1 | Connectivity + SSL | \`:443\` TLS cert + \`:9093\` TLS handshake |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 2 | Authentication | OAuth token + Kafka AdminClient + Schema Registry credential |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 3 | Avro Produce + Consume | \`scripts/schema-check.py\` via \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| 2 | Authentication | OAuth token + Kafka \`kafka-topics\` + Schema Registry REST |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| 3 | Avro Produce + Consume | \`scripts/schema-check.sh\` via \`confluentinc/cp-schema-registry\` |" >> $GITHUB_STEP_SUMMARY
