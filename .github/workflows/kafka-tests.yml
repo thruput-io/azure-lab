@@ -1,4 +1,4 @@
-name: 'Kafka Checks'
+name: 'Kafka Tests'
 
 on:
   workflow_dispatch:
@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  kafka-checks:
-    name: 'Kafka Checks'
+  kafka-tests:
+    name: 'Kafka Tests'
     runs-on: ubuntu-latest
     environment: production
 
