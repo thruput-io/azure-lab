@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Kafka connectivity + produce/consume check via kcat (librdkafka).
-# Uses SASL/OAUTHBEARER with sasl.oauthbearer.method=oidc which works
-# with Azure Event Hubs through App Gateway proxies (avoids Java Kafka
-# client SASL_AUTHENTICATE protocol incompatibility).
+# Kafka connectivity + auth + produce/consume check.
+# Uses the official confluentinc/cp-kafka image with SASL/PLAIN.
+#
+# Azure Event Hubs supports two SASL auth modes:
+#   1. SASL/PLAIN with connection string ($ConnectionString:password)
+#   2. SASL/PLAIN with OAuth token ($OAuth:JWT)
+# This script uses mode 2: acquires an Entra ID JWT then authenticates
+# with sasl.mechanism=PLAIN, username=$OAuth, password=<JWT>
 #
 # Only input: client.properties
 #
@@ -10,7 +14,7 @@
 #   ./scripts/kafka-check.sh --props-file /path/to/client.properties
 #
 # Local run (no install needed):
-#   docker pull confluentinc/cp-kcat:7.9.0
+#   docker pull confluentinc/cp-kafka:7.9.0
 #   ./scripts/kafka-check.sh --props-file /path/to/client.properties
 #
 # Required keys in client.properties:
@@ -22,12 +26,12 @@
 set -euo pipefail
 
 PROPS_FILE=""
-KCAT_IMAGE="edenhill/kcat:1.7.1"
+IMAGE="confluentinc/cp-kafka:7.9.0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --props-file) PROPS_FILE="$2"; shift 2 ;;
-    --image)      KCAT_IMAGE="$2"; shift 2 ;;
+    --image)      IMAGE="$2";      shift 2 ;;
     *) echo "ERROR: Unknown argument: $1"; exit 1 ;;
   esac
 done
@@ -53,11 +57,9 @@ TOKEN_URL=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d=
 # Handles both quoted (clientId="val") and unquoted (clientId=val) formats.
 JAAS_LINE=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)
 
-# awk: for each key=val or key="val" token, extract the value
 extract_jaas() {
   local key="$1"
   echo "$JAAS_LINE" | awk -v k="$key" '{
-    # try quoted first
     if (match($0, k "=\"[^\"]*\"")) {
       s = substr($0, RSTART, RLENGTH)
       gsub(k "=\"", "", s); gsub("\"", "", s); print s
@@ -74,7 +76,7 @@ SCOPE=$(extract_jaas "scope")
 
 if [[ -z "$CLIENT_ID" || -z "$CLIENT_SECRET" || -z "$SCOPE" ]]; then
   echo "ERROR: Could not extract clientId/clientSecret/scope from sasl.jaas.config"
-  echo "JAAS line: $JAAS_LINE"
+  echo "JAAS: $JAAS_LINE"
   exit 1
 fi
 
@@ -83,81 +85,106 @@ echo "==> checks_topic=${TOPIC}"
 echo "==> token_endpoint=${TOKEN_URL}"
 echo "==> client_id=${CLIENT_ID}"
 
-# Build a kcat-compatible config file using librdkafka OIDC properties
-# (no JAAS config needed — librdkafka fetches its own token)
-KCAT_CONF="/tmp/kcat-$$.conf"
-cat > "$KCAT_CONF" <<EOF
-metadata.broker.list=${BOOTSTRAP}
-security.protocol=sasl_ssl
-sasl.mechanisms=OAUTHBEARER
-sasl.oauthbearer.method=oidc
-sasl.oauthbearer.client.id=${CLIENT_ID}
-sasl.oauthbearer.client.secret=${CLIENT_SECRET}
-sasl.oauthbearer.token.endpoint.url=${TOKEN_URL}
-sasl.oauthbearer.scope=${SCOPE}
+# -----------------------------------------------------------------------
+# Step 1 — Acquire Entra ID OAuth JWT
+# Azure EH accepts a raw JWT via SASL/PLAIN with username='$OAuth'
+# -----------------------------------------------------------------------
+echo ""
+echo "==> [1] Acquiring Entra ID OAuth token ..."
+TOKEN_RESP=$(curl -sS --max-time 30 -X POST "$TOKEN_URL" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials" \
+  -d "client_id=${CLIENT_ID}" \
+  -d "client_secret=${CLIENT_SECRET}" \
+  -d "scope=${SCOPE}")
+
+OAUTH_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))" 2>/dev/null || true)
+
+if [[ -z "$OAUTH_TOKEN" ]]; then
+  echo "FAIL: Could not acquire OAuth token"
+  echo "Response: $TOKEN_RESP"
+  exit 1
+fi
+echo "PASS: OAuth token acquired (length=${#OAUTH_TOKEN})"
+
+# -----------------------------------------------------------------------
+# Build a client.properties file for SASL/PLAIN with OAuth token
+# Azure Event Hubs accepts:  username="$OAuth"  password=<JWT>
+# This uses the standard Java Kafka client (no JAAS OAUTHBEARER complexity)
+# -----------------------------------------------------------------------
+PLAIN_PROPS="/tmp/kafka-plain-$$.properties"
+cat > "$PLAIN_PROPS" <<EOF
+security.protocol=SASL_SSL
+sasl.mechanism=PLAIN
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="\$OAuth" password="${OAUTH_TOKEN}";
 EOF
 
-# Unique consumer group per run so -o beginning always works
+# Unique consumer group per run
 GROUP="kafka-check-$(date -u +%Y%m%dT%H%M%S)-$$"
 MSG='{"check":"kafka-check","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 
 echo "==> consumer.group=${GROUP}"
-echo "==> kcat image=${KCAT_IMAGE}"
+echo "==> using SASL/PLAIN with \$OAuth username + JWT password"
+echo "==> image=${IMAGE}"
 
 # -----------------------------------------------------------------------
-# Step 1 — Auth check: fetch Kafka metadata (kcat -L)
+# Step 2 — Auth check: list topics
 # -----------------------------------------------------------------------
 echo ""
-echo "==> [1] Authenticating — fetching Kafka metadata (kcat -L) ..."
+echo "==> [2] Authenticating with Kafka broker (kafka-topics --list) ..."
 docker run --rm \
-  -v "${KCAT_CONF}:/tmp/kcat.conf:ro" \
-  "$KCAT_IMAGE" \
-  kcat -F /tmp/kcat.conf -L -t "$TOPIC" 2>&1 | head -30
-
-echo "PASS: Kafka auth OK (metadata fetched)"
+  -v "${PLAIN_PROPS}:/tmp/client.properties:ro" \
+  "$IMAGE" \
+  kafka-topics \
+    --bootstrap-server "$BOOTSTRAP" \
+    --list \
+    --command-config /tmp/client.properties
+echo "PASS: Kafka auth OK (topic list succeeded)"
 
 # -----------------------------------------------------------------------
-# Step 2 — Produce a message
+# Step 3 — Produce a message
 # -----------------------------------------------------------------------
 echo ""
-echo "==> [2] Producing message to '${TOPIC}' ..."
+echo "==> [3] Producing message to '${TOPIC}' ..."
 echo "$MSG" | docker run -i --rm \
-  -v "${KCAT_CONF}:/tmp/kcat.conf:ro" \
-  "$KCAT_IMAGE" \
-  kcat -F /tmp/kcat.conf -P -t "$TOPIC" 2>&1
-
+  -v "${PLAIN_PROPS}:/tmp/client.properties:ro" \
+  "$IMAGE" \
+  kafka-console-producer \
+    --bootstrap-server "$BOOTSTRAP" \
+    --topic "$TOPIC" \
+    --producer.config /tmp/client.properties
 echo "PASS: Message produced to '${TOPIC}'"
 
 # -----------------------------------------------------------------------
-# Step 3 — Consume 1 message
+# Step 4 — Consume 1 message (unique group = fresh offset)
 # -----------------------------------------------------------------------
 echo ""
-echo "==> [3] Consuming message from '${TOPIC}' (group='${GROUP}') ..."
+echo "==> [4] Consuming message from '${TOPIC}' (group='${GROUP}', timeout 45s) ..."
 CONSUMED=$(docker run --rm \
-  -v "${KCAT_CONF}:/tmp/kcat.conf:ro" \
-  "$KCAT_IMAGE" \
-  kcat \
-    -F /tmp/kcat.conf \
-    -X group.id="${GROUP}" \
-    -C -t "$TOPIC" \
-    -o beginning \
-    -c 1 \
-    -e 2>&1) || true
+  -v "${PLAIN_PROPS}:/tmp/client.properties:ro" \
+  "$IMAGE" \
+  kafka-console-consumer \
+    --bootstrap-server "$BOOTSTRAP" \
+    --topic "$TOPIC" \
+    --consumer.config /tmp/client.properties \
+    --group "$GROUP" \
+    --from-beginning \
+    --max-messages 1 \
+    --timeout-ms 45000 2>&1) || true
 
-rm -f "$KCAT_CONF"
+rm -f "$PLAIN_PROPS"
 
-# Filter out log lines; keep only JSON payload
-JSON_LINE=$(echo "$CONSUMED" | grep -v '^%' | grep '^{' | head -1 || true)
+# Filter out log output; keep JSON payload line
+JSON_LINE=$(echo "$CONSUMED" | grep -v '^[[:space:]]*$' | grep -v '^[[:space:]]*[A-Z\[]' | grep '^{' | head -1 || true)
 if [[ -z "$JSON_LINE" ]]; then
-  # If no JSON but output is non-empty it might still be a valid message
-  JSON_LINE=$(echo "$CONSUMED" | grep -v '^%' | grep -v '^$' | head -1 || true)
+  JSON_LINE=$(echo "$CONSUMED" | grep -v '^[[:space:]]*$' | tail -3 | grep '{' | head -1 || true)
 fi
 
 if [[ -z "$JSON_LINE" ]]; then
   echo "--- consumer output (for debugging) ---"
   echo "$CONSUMED"
   echo "--- end consumer output ---"
-  echo "FAIL: No message consumed from '${TOPIC}'"
+  echo "FAIL: No message consumed from '${TOPIC}' within timeout"
   exit 1
 fi
 
