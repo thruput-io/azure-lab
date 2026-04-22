@@ -52,16 +52,17 @@ resource "azurerm_key_vault_secret" "kafka_client_properties" {
     "sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler",
     "sasl.oauthbearer.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
     "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"${azuread_application.kafka_client.client_id}\" clientSecret=\"${azuread_application_password.kafka_client_secret.value}\" scope=\"https://eventhubs.azure.net/.default\";",
-    "# Azure Event Hubs uses Kafka 1.0 protocol — pin version to avoid protocol negotiation issues",
-    "api.version.request=false",
-    "api.version.fallback.ms=0",
-    "broker.version.fallback=1.0.0",
     "",
     "# ============================================================",
     "# Topics",
     "# ============================================================",
     "topic=${azurerm_eventhub.orders_topic.name}",
     "checks_topic=${azurerm_eventhub.checks_topic.name}",
+    "",
+    "# ============================================================",
+    "# Test credentials (SASL/PLAIN $ConnectionString for cp-kafka tests)",
+    "# ============================================================",
+    "sasl.connection.string=${azurerm_eventhub_namespace.evh.default_primary_connection_string}",
   ])
 
   depends_on = [azurerm_role_assignment.deployer_kv_secrets_officer]
