@@ -57,12 +57,13 @@ TOPIC=$(get_prop "topic")
 TOKEN_ENDPOINT=$(get_prop "sasl.oauthbearer.token.endpoint.url")
 JAAS=$(get_prop "sasl.jaas.config")
 
-CLIENT_ID=$(echo "$JAAS"     | grep -oP 'clientId="\K[^"]+')
-CLIENT_SECRET=$(echo "$JAAS" | grep -oP 'clientSecret="\K[^"]+')
+CLIENT_ID=$(echo "$JAAS"     | sed -n 's/.*clientId="\([^"]*\)".*/\1/p')
+CLIENT_SECRET=$(echo "$JAAS" | sed -n 's/.*clientSecret="\([^"]*\)".*/\1/p')
 DOMAIN=$(echo "$BOOTSTRAP"   | cut -d: -f1)
 
 # Azure EH Schema Registry endpoint (Confluent SR-compatible REST API)
-SR_URL="https://${DOMAIN}"
+# The base URL for Confluent compatibility includes /$schemaregistry
+SR_URL="https://${DOMAIN}/\$schemaregistry"
 
 for var in BOOTSTRAP TOPIC TOKEN_ENDPOINT CLIENT_ID CLIENT_SECRET; do
   if [ -z "${!var}" ]; then
@@ -87,7 +88,7 @@ TOKEN_RESP=$(curl -sS --max-time 15 -X POST "$TOKEN_ENDPOINT" \
   --data-urlencode "client_secret=${CLIENT_SECRET}" \
   -d "scope=https://eventhubs.azure.net/.default")
 
-ACCESS_TOKEN=$(echo "$TOKEN_RESP" | grep -oP '"access_token":\s*"\K[^"]+' || true)
+ACCESS_TOKEN=$(echo "$TOKEN_RESP" | sed -n 's/.*"access_token":[[:space:]]*"\([^"]*\)".*/\1/p' || true)
 if [ -z "$ACCESS_TOKEN" ]; then
   echo "FAIL: Could not obtain OAuth token — response: $TOKEN_RESP"
   exit 1
@@ -95,18 +96,24 @@ fi
 echo "PASS: OAuth token acquired"
 
 # -----------------------------------------------------------
-# Step 2 — Register Avro schema via SR REST API
+# Step 2 — Register Avro schema via Confluent-compatible SR REST API
 # -----------------------------------------------------------
 echo ""
-echo "==> [2] Registering Avro schema '${SCHEMA_NAME}' in group '${SCHEMA_GROUP}' ..."
+echo "==> [2] Registering Avro schema '${SCHEMA_NAME}' via /subjects ..."
+
+# Wrap schema in the expected Confluent JSON format: {"schema": "..."}
+# We must escape the double quotes in the SCHEMA_DEF for the outer JSON
+ESCAPED_SCHEMA_DEF=$(echo "$SCHEMA_DEF" | sed 's/"/\\"/g')
+CONFLUENT_SCHEMA_PAYLOAD="{\"schema\":\"$ESCAPED_SCHEMA_DEF\"}"
 
 REGISTER_RESP=$(curl -sS --max-time 15 \
-  -X POST "${SR_URL}/\$schemagroups/${SCHEMA_GROUP}/schemas/${SCHEMA_NAME}" \
+  -X POST "${SR_URL}/subjects/${SCHEMA_NAME}/versions" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "Content-Type: application/json; serialization=Avro" \
-  --data-raw "$SCHEMA_DEF")
+  -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+  --data-raw "$CONFLUENT_SCHEMA_PAYLOAD")
 
-SCHEMA_ID=$(echo "$REGISTER_RESP" | grep -oP '"id":\s*"\K[^"]+' || true)
+# Confluent registration returns the numeric ID: {"id": 1}
+SCHEMA_ID=$(echo "$REGISTER_RESP" | sed -n 's/.*"id":[[:space:]]*\([0-9]*\).*/\1/p' || true)
 if [ -z "$SCHEMA_ID" ]; then
   echo "FAIL: Schema registration failed — response: $REGISTER_RESP"
   exit 1
