@@ -117,6 +117,11 @@ cat > "$PLAIN_PROPS" <<EOF
 security.protocol=SASL_SSL
 sasl.mechanism=PLAIN
 sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="\$OAuth" password="${OAUTH_TOKEN}";
+# Force Kafka 2.x API format so SASL_AUTHENTICATE uses API v0 (no authBytes field)
+# Azure Event Hubs responds with API v0 format which Kafka 3.x rejects by default.
+api.version.request=false
+api.version.fallback.ms=0
+broker.version.fallback=2.0.0
 EOF
 
 # Unique consumer group per run
