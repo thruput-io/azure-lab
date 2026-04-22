@@ -56,12 +56,13 @@ TOPIC=$(get_prop "topic")
 TOKEN_ENDPOINT=$(get_prop "sasl.oauthbearer.token.endpoint.url")
 JAAS=$(get_prop "sasl.jaas.config")
 SR_URL=$(get_prop "schema.registry.url")
+CONNECTION_STRING=$(get_prop "sasl.connection.string")
 
 CLIENT_ID=$(echo "$JAAS"     | sed -n 's/.*clientId="\([^"]*\)".*/\1/p')
 CLIENT_SECRET=$(echo "$JAAS" | sed -n 's/.*clientSecret="\([^"]*\)".*/\1/p')
 DOMAIN=$(echo "$BOOTSTRAP"   | cut -d: -f1)
 
-for var in BOOTSTRAP TOPIC TOKEN_ENDPOINT CLIENT_ID CLIENT_SECRET SR_URL; do
+for var in BOOTSTRAP TOPIC TOKEN_ENDPOINT CLIENT_ID CLIENT_SECRET SR_URL CONNECTION_STRING; do
   if [ -z "${!var}" ]; then
     echo "ERROR: Could not parse $var from client.properties"
     exit 1
@@ -118,22 +119,15 @@ echo "PASS: Schema registered — id=${SCHEMA_ID}"
 # -----------------------------------------------------------
 # Step 3 — Avro produce + consume via confluentinc/cp-schema-registry
 # -----------------------------------------------------------
-# Build Confluent consumer/producer properties
-# Azure EH SR supports Confluent SR REST API with Bearer auth
-CONFLUENT_PROPS=$(cat <<EOF
-bootstrap.servers=${BOOTSTRAP}
+# Build Kafka auth using SASL/PLAIN + $ConnectionString — same proven pattern as kafka-check.sh.
+# SR auth uses a separate OAuth bearer token (acquired in Step 1).
+CONFLUENT_PROPS_FILE=$(mktemp /tmp/confluent-props.XXXXXX)
+cat > "$CONFLUENT_PROPS_FILE" <<EOF
 security.protocol=SASL_SSL
-sasl.mechanism=OAUTHBEARER
-sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler
-sasl.oauthbearer.token.endpoint.url=${TOKEN_ENDPOINT}
-sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId="${CLIENT_ID}" clientSecret="${CLIENT_SECRET}" scope="https://eventhubs.azure.net/.default";
+sasl.mechanism=PLAIN
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="\$ConnectionString" password="${CONNECTION_STRING}";
 schema.registry.url=${SR_URL}
 EOF
-)
-
-# Write temp props accessible inside Docker
-CONFLUENT_PROPS_FILE=$(mktemp /tmp/confluent-props.XXXXXX)
-printf '%s' "$CONFLUENT_PROPS" > "$CONFLUENT_PROPS_FILE"
 
 TEST_MESSAGE="{\"order_id\":\"schema-check-$(date +%s)\",\"product\":\"test-widget\",\"quantity\":1,\"timestamp\":$(date +%s%3N)}"
 CONSUMER_GROUP="schema-check-$(date +%s)"
