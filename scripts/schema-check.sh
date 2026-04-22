@@ -20,7 +20,6 @@
 set -euo pipefail
 
 CONFLUENT_IMAGE="confluentinc/cp-schema-registry:7.9.0"
-SCHEMA_GROUP="orders-schema-group"
 SCHEMA_NAME="OrderPlaced"
 SCHEMA_DEF='{"type":"record","name":"OrderPlaced","namespace":"io.thruput.orders","fields":[{"name":"order_id","type":"string"},{"name":"product","type":"string"},{"name":"quantity","type":"int"},{"name":"timestamp","type":"long"}]}'
 
@@ -56,16 +55,13 @@ BOOTSTRAP=$(get_prop "bootstrap.servers")
 TOPIC=$(get_prop "topic")
 TOKEN_ENDPOINT=$(get_prop "sasl.oauthbearer.token.endpoint.url")
 JAAS=$(get_prop "sasl.jaas.config")
+SR_URL=$(get_prop "schema.registry.url")
 
 CLIENT_ID=$(echo "$JAAS"     | sed -n 's/.*clientId="\([^"]*\)".*/\1/p')
 CLIENT_SECRET=$(echo "$JAAS" | sed -n 's/.*clientSecret="\([^"]*\)".*/\1/p')
 DOMAIN=$(echo "$BOOTSTRAP"   | cut -d: -f1)
 
-# Azure EH Schema Registry endpoint (Confluent SR-compatible REST API)
-# The base URL for Confluent compatibility includes /$schemaregistry
-SR_URL="https://${DOMAIN}/\$schemaregistry"
-
-for var in BOOTSTRAP TOPIC TOKEN_ENDPOINT CLIENT_ID CLIENT_SECRET; do
+for var in BOOTSTRAP TOPIC TOKEN_ENDPOINT CLIENT_ID CLIENT_SECRET SR_URL; do
   if [ -z "${!var}" ]; then
     echo "ERROR: Could not parse $var from client.properties"
     exit 1
@@ -75,7 +71,6 @@ done
 echo "bootstrap  : $BOOTSTRAP"
 echo "topic      : $TOPIC"
 echo "sr_url     : $SR_URL"
-echo "schema_grp : $SCHEMA_GROUP"
 
 # -----------------------------------------------------------
 # Step 1 — Acquire Entra ID Bearer token
@@ -99,10 +94,9 @@ echo "PASS: OAuth token acquired"
 # Step 2 — Register Avro schema via Confluent-compatible SR REST API
 # -----------------------------------------------------------
 echo ""
-echo "==> [2] Registering Avro schema '${SCHEMA_NAME}' via /subjects ..."
+echo "==> [2] Registering Avro schema '${SCHEMA_NAME}' via Confluent API ..."
 
 # Wrap schema in the expected Confluent JSON format: {"schema": "..."}
-# We must escape the double quotes in the SCHEMA_DEF for the outer JSON
 ESCAPED_SCHEMA_DEF=$(echo "$SCHEMA_DEF" | sed 's/"/\\"/g')
 CONFLUENT_SCHEMA_PAYLOAD="{\"schema\":\"$ESCAPED_SCHEMA_DEF\"}"
 
@@ -116,6 +110,7 @@ REGISTER_RESP=$(curl -sS --max-time 15 \
 SCHEMA_ID=$(echo "$REGISTER_RESP" | sed -n 's/.*"id":[[:space:]]*\([0-9]*\).*/\1/p' || true)
 if [ -z "$SCHEMA_ID" ]; then
   echo "FAIL: Schema registration failed — response: $REGISTER_RESP"
+  echo "TIP: If response is 404, check if App Gateway needs a Rewrite Rule for /$schemaregistry"
   exit 1
 fi
 echo "PASS: Schema registered — id=${SCHEMA_ID}"
