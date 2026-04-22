@@ -75,3 +75,15 @@ output "kafka_client_secret" {
 output "kafka_bootstrap_server" {
   value = "${var.custom_domain_name}:9093"
 }
+
+output "schema_registry_endpoint" {
+  value = "https://${var.custom_domain_name}"
+}
+
+output "checks_topic" {
+  value = azurerm_eventhub.checks_topic.name
+}
+
+output "orders_topic" {
+  value = azurerm_eventhub.orders_topic.name
+}

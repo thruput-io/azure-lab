@@ -1,4 +1,4 @@
-name: 'Event Hub Endpoint Check'
+name: 'Kafka Checks (port 9093)'
 
 on:
   workflow_dispatch:
@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  endpoint-check:
-    name: 'Event Hub Endpoint Check'
+  kafka-checks:
+    name: 'Kafka Checks (port 9093)'
     runs-on: ubuntu-latest
     environment: production
 
@@ -41,7 +41,7 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
-    - name: Resolve credentials from Key Vault
+    - name: Resolve credentials
       id: creds
       run: |
         set -euo pipefail
@@ -51,6 +51,7 @@ jobs:
           echo "ERROR: Failed to resolve domain from terraform output kafka_bootstrap_server"
           exit 1
         fi
+        CHECKS_TOPIC=$(terraform output -raw checks_topic)
         KV_NAME=$(terraform output -raw key_vault_name)
         CLIENT_PROPS=$(az keyvault secret show \
           --vault-name "$KV_NAME" \
@@ -67,8 +68,9 @@ jobs:
           echo "ERROR: client.properties is missing bootstrap.servers"
           exit 1
         fi
-        echo "domain=$DOMAIN"         >> $GITHUB_OUTPUT
-        echo "props_file=$PROPS_FILE" >> $GITHUB_OUTPUT
+        echo "domain=$DOMAIN"               >> $GITHUB_OUTPUT
+        echo "props_file=$PROPS_FILE"       >> $GITHUB_OUTPUT
+        echo "checks_topic=$CHECKS_TOPIC"   >> $GITHUB_OUTPUT
       env:
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -103,9 +105,9 @@ jobs:
         DOMAIN: ${{ steps.creds.outputs.domain }}
 
     # ---------------------------------------------------------------
-    # Check 2: Kafka broker reachable on port 9093 via App Gateway (TCP)
+    # Check 2: Kafka broker TCP reachable on port 9093 (App Gateway)
     # ---------------------------------------------------------------
-    - name: 'Check 2 — Kafka broker TCP reachable via App Gateway (:9093)'
+    - name: 'Check 2 — Kafka broker TCP reachable on :9093'
       run: |
         set -euo pipefail
         echo "==> Checking TCP connectivity to ${DOMAIN}:9093 ..."
@@ -118,21 +120,20 @@ jobs:
         DOMAIN: ${{ steps.creds.outputs.domain }}
 
     # ---------------------------------------------------------------
-    # Check 3: Kafka produce + consume via SASL/OAUTHBEARER (Event Hubs)
-    # Uses the kafka-clients jar bundled in the Confluent CLI Docker image
-    # to send one record and read it back from the orders.placed topic.
+    # Check 3: Kafka produce + consume on checks.kafka (OAUTHBEARER)
+    # Uses the dedicated checks.kafka topic — no schema, plain JSON
     # ---------------------------------------------------------------
-    - name: 'Check 3 — Kafka produce + consume (SASL/OAUTHBEARER)'
+    - name: 'Check 3 — Kafka produce + consume on checks.kafka (:9093)'
       run: |
         set -euo pipefail
         PROPS_FILE="${{ steps.creds.outputs.props_file }}"
-        TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+        TOPIC="${{ steps.creds.outputs.checks_topic }}"
         DOMAIN="${{ steps.creds.outputs.domain }}"
 
-        echo "==> Installing kcat (kafkacat) ..."
+        echo "==> Installing kcat ..."
         sudo apt-get install -y kcat >/dev/null 2>&1
 
-        PAYLOAD="{\"check\":\"endpoint-check\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+        PAYLOAD="{\"check\":\"kafka-checks\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
         echo "==> Producing test message to topic '${TOPIC}' ..."
         echo "$PAYLOAD" | kcat \
           -P \
@@ -140,12 +141,12 @@ jobs:
           -t "$TOPIC" \
           -X security.protocol=SASL_SSL \
           -X sasl.mechanism=OAUTHBEARER \
-          -X sasl.oauthbearer.config="$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)" \
-          -X sasl.oauthbearer.token.endpoint.url="$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)" \
+          -X "sasl.oauthbearer.config=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)" \
+          -X "sasl.oauthbearer.token.endpoint.url=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)" \
           -X enable.ssl.certificate.verification=true
-        echo "PASS: Message produced successfully"
+        echo "PASS: Message produced to ${TOPIC}"
 
-        echo "==> Consuming one message from topic '${TOPIC}' (last offset, timeout 30s) ..."
+        echo "==> Consuming one message from '${TOPIC}' (last offset, timeout 30s) ..."
         CONSUMED=$(kcat \
           -C \
           -b "${DOMAIN}:9093" \
@@ -155,16 +156,16 @@ jobs:
           -e \
           -X security.protocol=SASL_SSL \
           -X sasl.mechanism=OAUTHBEARER \
-          -X sasl.oauthbearer.config="$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)" \
-          -X sasl.oauthbearer.token.endpoint.url="$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)" \
+          -X "sasl.oauthbearer.config=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)" \
+          -X "sasl.oauthbearer.token.endpoint.url=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)" \
           -X enable.ssl.certificate.verification=true \
           -X session.timeout.ms=30000 2>/dev/null || true)
         if [ -z "$CONSUMED" ]; then
-          echo "FAIL: No message consumed from topic '${TOPIC}'"
+          echo "FAIL: No message consumed from '${TOPIC}'"
           exit 1
         fi
         echo "Consumed: $CONSUMED"
-        echo "PASS: Produce + consume round-trip successful"
+        echo "PASS: Produce + consume round-trip on ${TOPIC} successful"
 
     # ---------------------------------------------------------------
     # Summary
@@ -172,10 +173,10 @@ jobs:
     - name: Summary
       if: always()
       run: |
-        printf '%s\n' "### Event Hub Endpoint Check Results" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "### Kafka Checks Results (port 9093)" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| Check | Target |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "|---|---|" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| TLS Certificate | \`${{ steps.creds.outputs.domain }}:443\` |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| Kafka TCP reachability | \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| Kafka produce + consume (OAUTHBEARER) | topic \`orders.placed\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Kafka produce + consume (OAUTHBEARER) | topic \`${{ steps.creds.outputs.checks_topic }}\` via \`:9093\` |" >> $GITHUB_STEP_SUMMARY

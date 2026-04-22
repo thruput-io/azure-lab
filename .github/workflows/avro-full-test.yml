@@ -1,0 +1,271 @@
+name: 'Avro Full Test (Confluent SerDes + Azure EH Schema Registry)'
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  avro-full-test:
+    name: 'Avro Full Test'
+    runs-on: ubuntu-latest
+    environment: production
+
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Azure Login
+      uses: azure/login@v3
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_wrapper: false
+
+    - name: Terraform Init
+      run: terraform init -input=false
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
+    - name: Resolve credentials
+      id: creds
+      run: |
+        set -euo pipefail
+        BOOTSTRAP=$(terraform output -raw kafka_bootstrap_server)
+        DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
+        if [ -z "$DOMAIN" ]; then
+          echo "ERROR: Failed to resolve domain from terraform output kafka_bootstrap_server"
+          exit 1
+        fi
+        SR_ENDPOINT=$(terraform output -raw schema_registry_endpoint)
+        ORDERS_TOPIC=$(terraform output -raw orders_topic)
+        KV_NAME=$(terraform output -raw key_vault_name)
+        CLIENT_PROPS=$(az keyvault secret show \
+          --vault-name "$KV_NAME" \
+          --name kafka-client-properties \
+          --query value -o tsv)
+        PROPS_FILE="/tmp/client.properties"
+        printf '%s\n' "$CLIENT_PROPS" > "$PROPS_FILE"
+        sed -i 's/\r$//' "$PROPS_FILE"
+        if [ ! -s "$PROPS_FILE" ]; then
+          echo "ERROR: Retrieved kafka-client-properties is empty"
+          exit 1
+        fi
+        if ! grep -q '^bootstrap.servers=' "$PROPS_FILE"; then
+          echo "ERROR: client.properties is missing bootstrap.servers"
+          exit 1
+        fi
+        echo "domain=$DOMAIN"                 >> $GITHUB_OUTPUT
+        echo "sr_endpoint=$SR_ENDPOINT"       >> $GITHUB_OUTPUT
+        echo "orders_topic=$ORDERS_TOPIC"     >> $GITHUB_OUTPUT
+        echo "props_file=$PROPS_FILE"         >> $GITHUB_OUTPUT
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+
+    - name: Install Python dependencies
+      run: |
+        pip install --quiet \
+          confluent-kafka \
+          azure-schemaregistry \
+          azure-schemaregistry-avroencoder \
+          azure-identity \
+          fastavro
+      working-directory: .
+
+    # ---------------------------------------------------------------
+    # Avro Full Test: register schema, produce Avro message, consume
+    # and decode using Confluent SerDes + Azure EH Schema Registry
+    # ---------------------------------------------------------------
+    - name: 'Avro Full Test — register schema, produce + consume'
+      run: |
+        set -euo pipefail
+        python3 << 'PYEOF'
+        import os, sys, time, json
+
+        # ── Read config from client.properties ──────────────────────
+        props_file = os.environ["PROPS_FILE"]
+        props = {}
+        with open(props_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    props[k.strip()] = v.strip()
+
+        bootstrap = props["bootstrap.servers"]
+        token_endpoint = props["sasl.oauthbearer.token.endpoint.url"]
+        jaas = props["sasl.jaas.config"]
+
+        # Extract clientId / clientSecret from jaas config
+        import re
+        client_id     = re.search(r'clientId="([^"]+)"', jaas).group(1)
+        client_secret = re.search(r'clientSecret="([^"]+)"', jaas).group(1)
+        tenant_id     = re.search(r'/([^/]+)/oauth2', token_endpoint).group(1)
+
+        topic         = os.environ["ORDERS_TOPIC"]
+        sr_endpoint   = os.environ["SR_ENDPOINT"]
+        schema_group  = "orders-schema-group"
+
+        print(f"bootstrap  : {bootstrap}")
+        print(f"sr_endpoint: {sr_endpoint}")
+        print(f"topic      : {topic}")
+
+        # ── Avro schema ──────────────────────────────────────────────
+        SCHEMA_NAME = "OrderPlaced"
+        SCHEMA_DEF = json.dumps({
+            "type": "record",
+            "name": "OrderPlaced",
+            "namespace": "io.thruput.orders",
+            "fields": [
+                {"name": "order_id",   "type": "string"},
+                {"name": "product",    "type": "string"},
+                {"name": "quantity",   "type": "int"},
+                {"name": "timestamp",  "type": "long"}
+            ]
+        })
+
+        # ── Azure credential for Schema Registry ─────────────────────
+        from azure.identity import ClientSecretCredential
+        from azure.schemaregistry import SchemaRegistryClient
+        from azure.schemaregistry.encoder.avroencoder import AvroEncoder
+
+        credential = ClientSecretCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
+        )
+
+        sr_client = SchemaRegistryClient(
+            fully_qualified_namespace=sr_endpoint.removeprefix("https://"),
+            credential=credential
+        )
+
+        # ── Register (or retrieve) the schema ────────────────────────
+        print(f"==> Registering schema '{SCHEMA_NAME}' in group '{schema_group}' ...")
+        schema_props = sr_client.register_schema(
+            group_name=schema_group,
+            name=SCHEMA_NAME,
+            definition=SCHEMA_DEF,
+            format="Avro"
+        )
+        print(f"PASS: Schema registered — id={schema_props.id}")
+
+        # ── Build Avro encoder ───────────────────────────────────────
+        encoder = AvroEncoder(
+            client=sr_client,
+            group_name=schema_group,
+            auto_register=True
+        )
+
+        # ── Produce one Avro message via confluent-kafka ──────────────
+        from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
+
+        kafka_conf = {
+            "bootstrap.servers":             bootstrap,
+            "security.protocol":             "SASL_SSL",
+            "sasl.mechanisms":               "OAUTHBEARER",
+            "sasl.oauthbearer.config":       jaas,
+            "sasl.oauthbearer.token.endpoint.url": token_endpoint,
+            "enable.ssl.certificate.verification": True,
+        }
+
+        payload = {
+            "order_id":  "avro-full-test-001",
+            "product":   "test-widget",
+            "quantity":  1,
+            "timestamp": int(time.time() * 1000)
+        }
+
+        encoded = encoder.encode(payload, schema_format="Avro")
+        encoded_bytes = bytes(encoded)
+
+        producer = Producer(kafka_conf)
+
+        delivered = {"ok": False, "err": None}
+        def on_delivery(err, msg):
+            if err:
+                delivered["err"] = err
+            else:
+                delivered["ok"] = True
+                print(f"PASS: Produced to {msg.topic()} partition={msg.partition()} offset={msg.offset()}")
+
+        print(f"==> Producing Avro message to topic '{topic}' ...")
+        producer.produce(topic, value=encoded_bytes, callback=on_delivery)
+        producer.flush(timeout=30)
+
+        if not delivered["ok"]:
+            print(f"FAIL: Delivery failed — {delivered['err']}")
+            sys.exit(1)
+
+        # ── Consume one Avro message ──────────────────────────────────
+        consumer_conf = {
+            **kafka_conf,
+            "group.id":        f"avro-full-test-{int(time.time())}",
+            "auto.offset.reset": "latest",
+            "session.timeout.ms": 30000,
+        }
+
+        consumer = Consumer(consumer_conf)
+        consumer.subscribe([topic])
+
+        print(f"==> Consuming Avro message from topic '{topic}' (timeout 45s) ...")
+        deadline = time.time() + 45
+        consumed_msg = None
+        while time.time() < deadline:
+            msg = consumer.poll(timeout=2.0)
+            if msg is None:
+                continue
+            if msg.error():
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    continue
+                raise KafkaException(msg.error())
+            consumed_msg = msg
+            break
+        consumer.close()
+
+        if consumed_msg is None:
+            print(f"FAIL: No message consumed from '{topic}' within timeout")
+            sys.exit(1)
+
+        # ── Decode Avro ──────────────────────────────────────────────
+        decoded = encoder.decode(consumed_msg.value())
+        print(f"Decoded  : {decoded}")
+        print(f"PASS: Avro produce + consume round-trip successful on topic '{topic}'")
+        PYEOF
+      env:
+        PROPS_FILE: ${{ steps.creds.outputs.props_file }}
+        ORDERS_TOPIC: ${{ steps.creds.outputs.orders_topic }}
+        SR_ENDPOINT: ${{ steps.creds.outputs.sr_endpoint }}
+      working-directory: .
+
+    # ---------------------------------------------------------------
+    # Summary
+    # ---------------------------------------------------------------
+    - name: Summary
+      if: always()
+      run: |
+        printf '%s\n' "### Avro Full Test Results" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Step | Target |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "|---|---|" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Schema Registry — register Avro schema | \`${{ steps.creds.outputs.sr_endpoint }}\` (group: \`orders-schema-group\`) |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Produce Avro message (Confluent SerDes) | topic \`${{ steps.creds.outputs.orders_topic }}\` on \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| Consume + decode Avro message | topic \`${{ steps.creds.outputs.orders_topic }}\` |" >> $GITHUB_STEP_SUMMARY
+      working-directory: .
