@@ -25,10 +25,14 @@ jobs:
     # ---------------------------------------------------------------
     - name: Load client.properties
       id: creds
+      env:
+        KAFKA_CLIENT_PROPERTIES: ${{ secrets.KAFKA_CLIENT_PROPERTIES }}
       run: |
         set -euo pipefail
         PROPS_FILE="/tmp/client.properties"
-        printf '%s' "${{ secrets.KAFKA_CLIENT_PROPERTIES }}" > "$PROPS_FILE"
+        # Pass secret via env var to avoid inline substitution breaking shell quoting
+        # (the secret contains double-quotes in JAAS config that would break printf "...")
+        printf '%s' "$KAFKA_CLIENT_PROPERTIES" > "$PROPS_FILE"
         sed -i 's/\r$//' "$PROPS_FILE"
 
         if [ ! -s "$PROPS_FILE" ]; then
