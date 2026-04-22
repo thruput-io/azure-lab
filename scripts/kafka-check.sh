@@ -19,7 +19,7 @@
 set -euo pipefail
 
 PROPS_FILE=""
-IMAGE="confluentinc/cp-kafka:7.9.0"
+IMAGE="confluentinc/cp-kafka:6.2.0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
