@@ -49,14 +49,32 @@ BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE"               | cut -d= -f2
 TOPIC=$(grep '^checks_topic='          "$PROPS_FILE"               | cut -d= -f2- | tr -d ' \r\n')
 TOKEN_URL=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 
-# Extract OAuth credentials from sasl.jaas.config line
+# Extract OAuth credentials from sasl.jaas.config line.
+# Handles both quoted (clientId="val") and unquoted (clientId=val) formats.
 JAAS_LINE=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)
-CLIENT_ID=$(echo "$JAAS_LINE"     | sed 's/.*clientId="\([^"]*\)".*/\1/')
-CLIENT_SECRET=$(echo "$JAAS_LINE" | sed 's/.*clientSecret="\([^"]*\)".*/\1/')
-SCOPE=$(echo "$JAAS_LINE"         | sed 's/.*scope="\([^"]*\)".*/\1/')
+
+# awk: for each key=val or key="val" token, extract the value
+extract_jaas() {
+  local key="$1"
+  echo "$JAAS_LINE" | awk -v k="$key" '{
+    # try quoted first
+    if (match($0, k "=\"[^\"]*\"")) {
+      s = substr($0, RSTART, RLENGTH)
+      gsub(k "=\"", "", s); gsub("\"", "", s); print s
+    } else if (match($0, k "=[^ ;\"]*")) {
+      s = substr($0, RSTART, RLENGTH)
+      gsub(k "=", "", s); gsub(";", "", s); print s
+    }
+  }'
+}
+
+CLIENT_ID=$(extract_jaas "clientId")
+CLIENT_SECRET=$(extract_jaas "clientSecret")
+SCOPE=$(extract_jaas "scope")
 
 if [[ -z "$CLIENT_ID" || -z "$CLIENT_SECRET" || -z "$SCOPE" ]]; then
   echo "ERROR: Could not extract clientId/clientSecret/scope from sasl.jaas.config"
+  echo "JAAS line: $JAAS_LINE"
   exit 1
 fi
 
@@ -70,10 +88,8 @@ echo "==> client_id=${CLIENT_ID}"
 KCAT_CONF="/tmp/kcat-$$.conf"
 cat > "$KCAT_CONF" <<EOF
 metadata.broker.list=${BOOTSTRAP}
-broker.version.fallback=1.0
 security.protocol=sasl_ssl
 sasl.mechanisms=OAUTHBEARER
-sasl.oauthbearer.method=oidc
 sasl.oauthbearer.client.id=${CLIENT_ID}
 sasl.oauthbearer.client.secret=${CLIENT_SECRET}
 sasl.oauthbearer.token.endpoint.url=${TOKEN_URL}
