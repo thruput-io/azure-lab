@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
 
 jobs:
@@ -17,39 +16,23 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v6
 
-    - name: Azure Login
-      uses: azure/login@v3
-      env:
-        AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-
     # ---------------------------------------------------------------
-    # Download client.properties from Key Vault.
+    # Write client.properties from the repository secret.
+    # The secret KAFKA_CLIENT_PROPERTIES holds the full file content
+    # (populated credentials — do NOT commit to git).
     # All values (bootstrap, topics, OAuth) come from this file.
-    # No Terraform required — KV is looked up by resource group.
+    # No Azure login or Key Vault call is needed.
     # ---------------------------------------------------------------
     - name: Load client.properties
       id: creds
       run: |
         set -euo pipefail
-        KV_NAME=$(az keyvault list \
-          --resource-group rg-eventhub-appgw-lab \
-          --query "[0].name" -o tsv)
-        if [ -z "$KV_NAME" ]; then
-          echo "ERROR: Could not find a Key Vault in rg-eventhub-appgw-lab"
-          exit 1
-        fi
-        echo "Using Key Vault: $KV_NAME"
-
         PROPS_FILE="/tmp/client.properties"
-        az keyvault secret show \
-          --vault-name "$KV_NAME" \
-          --name kafka-client-properties \
-          --query value -o tsv > "$PROPS_FILE"
+        printf '%s' "${{ secrets.KAFKA_CLIENT_PROPERTIES }}" > "$PROPS_FILE"
         sed -i 's/\r$//' "$PROPS_FILE"
 
         if [ ! -s "$PROPS_FILE" ]; then
-          echo "ERROR: client.properties downloaded from Key Vault is empty"
+          echo "ERROR: KAFKA_CLIENT_PROPERTIES secret is empty — set it in repo Settings → Secrets"
           exit 1
         fi
         if ! grep -q '^bootstrap.servers=' "$PROPS_FILE"; then
