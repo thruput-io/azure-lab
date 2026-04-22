@@ -1,4 +1,4 @@
-name: 'Kafka Checks (port 9093)'
+name: 'Kafka Checks'
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   kafka-checks:
-    name: 'Kafka Checks (port 9093)'
+    name: 'Kafka Checks'
     runs-on: ubuntu-latest
     environment: production
 
@@ -68,9 +68,9 @@ jobs:
           echo "ERROR: client.properties is missing bootstrap.servers"
           exit 1
         fi
-        echo "domain=$DOMAIN"               >> $GITHUB_OUTPUT
-        echo "props_file=$PROPS_FILE"       >> $GITHUB_OUTPUT
-        echo "checks_topic=$CHECKS_TOPIC"   >> $GITHUB_OUTPUT
+        echo "domain=$DOMAIN"             >> $GITHUB_OUTPUT
+        echo "props_file=$PROPS_FILE"     >> $GITHUB_OUTPUT
+        echo "checks_topic=$CHECKS_TOPIC" >> $GITHUB_OUTPUT
       env:
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -78,94 +78,197 @@ jobs:
         ARM_USE_OIDC: true
 
     # ---------------------------------------------------------------
-    # Check 1: TLS certificate valid and trusted on :443
+    # Check 1 — Connectivity + SSL
+    # TLS handshake on :443 (HTTPS), TLS handshake on :9093 (Kafka)
     # ---------------------------------------------------------------
-    - name: 'Check 1 — TLS certificate valid and trusted'
+    - name: 'Check 1 — Connectivity + SSL'
+      id: check1
       run: |
         set -euo pipefail
-        echo "==> Verifying TLS certificate for ${DOMAIN}:443 ..."
+        DOMAIN="${{ steps.creds.outputs.domain }}"
+
+        echo "==> [1a] TLS certificate on ${DOMAIN}:443 ..."
         CERT_RESULT=$(echo | openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" 2>/dev/null)
         if ! echo "$CERT_RESULT" | grep -q "Verify return code: 0 (ok)"; then
-          VERIFY_CODE=$(echo "$CERT_RESULT" | grep "Verify return code:" || echo "(not found)")
-          echo "FAIL: TLS certificate verification failed — $VERIFY_CODE"
+          echo "FAIL: TLS certificate verification failed on :443"
           exit 1
         fi
-        CERT_CN=$(echo "$CERT_RESULT" | openssl x509 -noout -subject 2>/dev/null | sed 's/.*CN *= *//')
         EXPIRY=$(echo "$CERT_RESULT" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
         EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$EXPIRY" +%s 2>/dev/null)
-        NOW_EPOCH=$(date +%s)
-        DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
-        echo "Certificate CN: $CERT_CN  |  Expires: $EXPIRY  |  Days left: $DAYS_LEFT"
+        DAYS_LEFT=$(( (EXPIRY_EPOCH - $(date +%s)) / 86400 ))
+        echo "  Certificate expires in $DAYS_LEFT days ($EXPIRY)"
         if [ "$DAYS_LEFT" -lt 7 ]; then
           echo "FAIL: Certificate expires in $DAYS_LEFT days — renew immediately"
           exit 1
         fi
-        echo "PASS: TLS certificate is valid, trusted, and expires in $DAYS_LEFT days"
-      env:
-        DOMAIN: ${{ steps.creds.outputs.domain }}
+        echo "PASS: :443 TLS certificate valid, $DAYS_LEFT days remaining"
 
-    # ---------------------------------------------------------------
-    # Check 2: Kafka broker TCP reachable on port 9093 (App Gateway)
-    # ---------------------------------------------------------------
-    - name: 'Check 2 — Kafka broker TCP reachable on :9093'
-      run: |
-        set -euo pipefail
-        echo "==> Checking TCP connectivity to ${DOMAIN}:9093 ..."
-        if ! timeout 10 bash -c "echo > /dev/tcp/$DOMAIN/9093" 2>/dev/null; then
-          echo "FAIL: Cannot reach ${DOMAIN}:9093 — check DNS and App Gateway firewall"
+        echo "==> [1b] TLS handshake on ${DOMAIN}:9093 (Kafka) ..."
+        KAFKA_TLS=$(echo | openssl s_client -connect "${DOMAIN}:9093" -servername "$DOMAIN" 2>/dev/null)
+        if ! echo "$KAFKA_TLS" | grep -q "Verify return code: 0 (ok)"; then
+          echo "FAIL: TLS certificate verification failed on :9093"
           exit 1
         fi
-        echo "PASS: ${DOMAIN}:9093 is reachable"
-      env:
-        DOMAIN: ${{ steps.creds.outputs.domain }}
+        echo "PASS: :9093 TLS handshake successful"
 
     # ---------------------------------------------------------------
-    # Check 3: Kafka produce + consume on checks.kafka (OAUTHBEARER)
-    # Uses the dedicated checks.kafka topic — no schema, plain JSON
+    # Check 2 — Authentication (SASL/OAUTHBEARER)
+    # Fetch an Entra ID token then verify Kafka broker rejects no-auth
+    # and accepts the token by calling broker metadata
     # ---------------------------------------------------------------
-    - name: 'Check 3 — Kafka produce + consume on checks.kafka (:9093)'
+    - name: 'Check 2 — Authentication (SASL/OAUTHBEARER)'
+      id: check2
+      run: |
+        set -euo pipefail
+        PROPS_FILE="${{ steps.creds.outputs.props_file }}"
+        DOMAIN="${{ steps.creds.outputs.domain }}"
+
+        # Extract OAuth params from client.properties (Confluent librdkafka keys)
+        TOKEN_ENDPOINT=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)
+        JAAS=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)
+        CLIENT_ID=$(echo "$JAAS" | grep -oP 'clientId="\K[^"]+')
+        CLIENT_SECRET=$(echo "$JAAS" | grep -oP 'clientSecret="\K[^"]+')
+
+        echo "==> Fetching Entra ID OAuth token from $TOKEN_ENDPOINT ..."
+        TOKEN_RESP=$(curl -sS --max-time 15 -X POST "$TOKEN_ENDPOINT" \
+          -d "grant_type=client_credentials" \
+          -d "client_id=$CLIENT_ID" \
+          --data-urlencode "client_secret=$CLIENT_SECRET" \
+          -d "scope=https://eventhubs.azure.net/.default")
+        ACCESS_TOKEN=$(echo "$TOKEN_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))")
+        if [ -z "$ACCESS_TOKEN" ]; then
+          echo "FAIL: Could not obtain OAuth token — response: $TOKEN_RESP"
+          exit 1
+        fi
+        echo "PASS: OAuth token acquired successfully"
+
+        # Install confluent-kafka (librdkafka based — official Confluent Python client)
+        echo "==> Installing confluent-kafka ..."
+        pip install --quiet confluent-kafka
+
+        # Use confluent-kafka AdminClient to list topics — proves auth works end-to-end
+        echo "==> Verifying Kafka auth with AdminClient (list topics) ..."
+        python3 << PYEOF
+        import sys
+        from confluent_kafka.admin import AdminClient
+
+        with open("$PROPS_FILE") as f:
+            props = {}
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    props[k.strip()] = v.strip()
+
+        conf = {
+            "bootstrap.servers":                        props["bootstrap.servers"],
+            "security.protocol":                        "SASL_SSL",
+            "sasl.mechanisms":                          "OAUTHBEARER",
+            "sasl.oauthbearer.method":                  "oidc",
+            "sasl.oauthbearer.token.endpoint.url":      props["sasl.oauthbearer.token.endpoint.url"],
+            "sasl.oauthbearer.client.id":               next(v for k,v in (p.partition("=")[::2] for p in props["sasl.jaas.config"].split()) if "clientId" in k.strip('"')).strip('"'),
+            "sasl.oauthbearer.client.secret":           next(v for k,v in (p.partition("=")[::2] for p in props["sasl.jaas.config"].split()) if "clientSecret" in k.strip('"')).strip('"'),
+            "sasl.oauthbearer.scope":                   "https://eventhubs.azure.net/.default",
+            "enable.ssl.certificate.verification":      "true",
+        }
+
+        admin = AdminClient(conf)
+        md = admin.list_topics(timeout=20)
+        print(f"PASS: AdminClient authenticated — broker={md.orig_broker_name}, topics={len(md.topics)}")
+        PYEOF
+      working-directory: .
+
+    # ---------------------------------------------------------------
+    # Check 3 — Produce + Consume (plain JSON, checks.kafka topic)
+    # ---------------------------------------------------------------
+    - name: 'Check 3 — Produce + Consume (checks.kafka)'
+      id: check3
       run: |
         set -euo pipefail
         PROPS_FILE="${{ steps.creds.outputs.props_file }}"
         TOPIC="${{ steps.creds.outputs.checks_topic }}"
-        DOMAIN="${{ steps.creds.outputs.domain }}"
 
-        echo "==> Installing kcat ..."
-        sudo apt-get install -y kcat >/dev/null 2>&1
+        python3 << PYEOF
+        import sys, time, json, os
+        from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
 
-        PAYLOAD="{\"check\":\"kafka-checks\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
-        echo "==> Producing test message to topic '${TOPIC}' ..."
-        echo "$PAYLOAD" | kcat \
-          -P \
-          -b "${DOMAIN}:9093" \
-          -t "$TOPIC" \
-          -X security.protocol=SASL_SSL \
-          -X sasl.mechanism=OAUTHBEARER \
-          -X "sasl.oauthbearer.config=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)" \
-          -X "sasl.oauthbearer.token.endpoint.url=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)" \
-          -X enable.ssl.certificate.verification=true
-        echo "PASS: Message produced to ${TOPIC}"
+        props_file = "$PROPS_FILE"
+        topic      = "$TOPIC"
 
-        echo "==> Consuming one message from '${TOPIC}' (last offset, timeout 30s) ..."
-        CONSUMED=$(kcat \
-          -C \
-          -b "${DOMAIN}:9093" \
-          -t "$TOPIC" \
-          -o -1 \
-          -c 1 \
-          -e \
-          -X security.protocol=SASL_SSL \
-          -X sasl.mechanism=OAUTHBEARER \
-          -X "sasl.oauthbearer.config=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)" \
-          -X "sasl.oauthbearer.token.endpoint.url=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)" \
-          -X enable.ssl.certificate.verification=true \
-          -X session.timeout.ms=30000 2>/dev/null || true)
-        if [ -z "$CONSUMED" ]; then
-          echo "FAIL: No message consumed from '${TOPIC}'"
-          exit 1
-        fi
-        echo "Consumed: $CONSUMED"
-        echo "PASS: Produce + consume round-trip on ${TOPIC} successful"
+        with open(props_file) as f:
+            props = {}
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, _, v = line.partition("=")
+                    props[k.strip()] = v.strip()
+
+        def jaas_field(jaas, key):
+            import re
+            m = re.search(rf'{key}="([^"]+)"', jaas)
+            return m.group(1) if m else ""
+
+        jaas = props["sasl.jaas.config"]
+
+        kafka_conf = {
+            "bootstrap.servers":                   props["bootstrap.servers"],
+            "security.protocol":                   "SASL_SSL",
+            "sasl.mechanisms":                     "OAUTHBEARER",
+            "sasl.oauthbearer.method":             "oidc",
+            "sasl.oauthbearer.token.endpoint.url": props["sasl.oauthbearer.token.endpoint.url"],
+            "sasl.oauthbearer.client.id":          jaas_field(jaas, "clientId"),
+            "sasl.oauthbearer.client.secret":      jaas_field(jaas, "clientSecret"),
+            "sasl.oauthbearer.scope":              "https://eventhubs.azure.net/.default",
+            "enable.ssl.certificate.verification": True,
+        }
+
+        # Produce
+        payload = json.dumps({"check": "kafka-checks", "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+        producer = Producer(kafka_conf)
+        delivered = {"ok": False, "err": None}
+        def on_delivery(err, msg):
+            if err:
+                delivered["err"] = err
+            else:
+                delivered["ok"] = True
+                print(f"PASS: Produced to {msg.topic()} partition={msg.partition()} offset={msg.offset()}")
+        print(f"==> Producing message to '{topic}' ...")
+        producer.produce(topic, value=payload.encode(), callback=on_delivery)
+        producer.flush(timeout=30)
+        if not delivered["ok"]:
+            print(f"FAIL: Delivery failed — {delivered['err']}")
+            sys.exit(1)
+
+        # Consume
+        consumer_conf = {
+            **kafka_conf,
+            "group.id":           f"kafka-checks-{int(time.time())}",
+            "auto.offset.reset":  "latest",
+            "session.timeout.ms": 30000,
+        }
+        consumer = Consumer(consumer_conf)
+        consumer.subscribe([topic])
+        print(f"==> Consuming message from '{topic}' (timeout 45s) ...")
+        deadline = time.time() + 45
+        consumed = None
+        while time.time() < deadline:
+            msg = consumer.poll(2.0)
+            if msg is None:
+                continue
+            if msg.error():
+                if msg.error().code() == KafkaError._PARTITION_EOF:
+                    continue
+                raise KafkaException(msg.error())
+            consumed = msg
+            break
+        consumer.close()
+        if consumed is None:
+            print(f"FAIL: No message consumed from '{topic}' within timeout")
+            sys.exit(1)
+        print(f"Consumed : {consumed.value().decode()}")
+        print(f"PASS: Produce + consume round-trip on '{topic}' successful")
+        PYEOF
+      working-directory: .
 
     # ---------------------------------------------------------------
     # Summary
@@ -173,10 +276,11 @@ jobs:
     - name: Summary
       if: always()
       run: |
-        printf '%s\n' "### Kafka Checks Results (port 9093)" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "### Kafka Checks Results" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| Check | Target |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "|---|---|" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| TLS Certificate | \`${{ steps.creds.outputs.domain }}:443\` |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| Kafka TCP reachability | \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| Kafka produce + consume (OAUTHBEARER) | topic \`${{ steps.creds.outputs.checks_topic }}\` via \`:9093\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| # | Check | Target |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "|---|---|---|" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| 1 | Connectivity + SSL | \`:443\` TLS cert + \`:9093\` TLS handshake |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| 2 | Authentication (SASL/OAUTHBEARER) | OAuth token + AdminClient metadata via \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| 3 | Produce + Consume | topic \`${{ steps.creds.outputs.checks_topic }}\` via \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
+      working-directory: .
