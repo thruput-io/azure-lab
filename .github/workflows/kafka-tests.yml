@@ -46,13 +46,10 @@ jobs:
 
         BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
         DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
-        CHECKS_TOPIC=$(grep '^checks_topic=' "$PROPS_FILE" | cut -d= -f2-)
 
-        echo "domain=$DOMAIN"             >> $GITHUB_OUTPUT
-        echo "bootstrap=$BOOTSTRAP"       >> $GITHUB_OUTPUT
-        echo "props_file=$PROPS_FILE"     >> $GITHUB_OUTPUT
-        echo "checks_topic=$CHECKS_TOPIC" >> $GITHUB_OUTPUT
-        echo "Loaded: bootstrap=$BOOTSTRAP  checks_topic=$CHECKS_TOPIC"
+        echo "domain=$DOMAIN"         >> $GITHUB_OUTPUT
+        echo "props_file=$PROPS_FILE" >> $GITHUB_OUTPUT
+        echo "Loaded: bootstrap=$BOOTSTRAP"
 
     # ---------------------------------------------------------------
     # Check 1 — Connectivity + SSL
@@ -89,63 +86,17 @@ jobs:
         echo "PASS: :9093 TLS handshake successful"
 
     # ---------------------------------------------------------------
-    # Check 2 — Authentication (SASL/OAUTHBEARER)
-    # Uses official confluentinc/cp-kafka image: kafka-topics --list
+    # Check 2 + 3 — Auth + Produce/Consume via scripts/kafka-check.sh
+    # Uses official confluentinc/cp-kafka image.
+    # Only input: client.properties
+    # Run locally: ./scripts/kafka-check.sh --props-file client.properties
     # ---------------------------------------------------------------
-    - name: 'Check 2 — Authentication (SASL/OAUTHBEARER)'
-      id: check2
+    - name: 'Check 2 + 3 — Auth + Produce/Consume (confluentinc/cp-kafka)'
+      id: check23
       run: |
         set -euo pipefail
-        echo "==> Authenticating with Kafka broker via SASL/OAUTHBEARER ..."
-        docker run --rm \
-          -v /tmp/client.properties:/tmp/client.properties \
-          confluentinc/cp-kafka:7.9.0 \
-          kafka-topics \
-            --bootstrap-server "${{ steps.creds.outputs.bootstrap }}" \
-            --list \
-            --command-config /tmp/client.properties
-        echo "PASS: Kafka auth OK (topic list succeeded)"
-
-    # ---------------------------------------------------------------
-    # Check 3 — Produce + Consume (checks.kafka topic)
-    # Uses official confluentinc/cp-kafka image:
-    #   kafka-console-producer and kafka-console-consumer
-    # ---------------------------------------------------------------
-    - name: 'Check 3 — Produce + Consume (checks.kafka)'
-      id: check3
-      run: |
-        set -euo pipefail
-        BOOTSTRAP="${{ steps.creds.outputs.bootstrap }}"
-        TOPIC="${{ steps.creds.outputs.checks_topic }}"
-        MSG='{"check":"kafka-tests","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
-
-        echo "==> Producing message to '$TOPIC' ..."
-        echo "$MSG" | docker run -i --rm \
-          -v /tmp/client.properties:/tmp/client.properties \
-          confluentinc/cp-kafka:7.9.0 \
-          kafka-console-producer \
-            --bootstrap-server "$BOOTSTRAP" \
-            --topic "$TOPIC" \
-            --producer.config /tmp/client.properties
-        echo "PASS: Message produced to '$TOPIC'"
-
-        echo "==> Consuming message from '$TOPIC' (timeout 45s) ..."
-        CONSUMED=$(docker run --rm \
-          -v /tmp/client.properties:/tmp/client.properties \
-          confluentinc/cp-kafka:7.9.0 \
-          kafka-console-consumer \
-            --bootstrap-server "$BOOTSTRAP" \
-            --topic "$TOPIC" \
-            --consumer.config /tmp/client.properties \
-            --from-beginning \
-            --max-messages 1 \
-            --timeout-ms 45000 2>/dev/null || true)
-        if [ -z "$CONSUMED" ]; then
-          echo "FAIL: No message consumed from '$TOPIC' within timeout"
-          exit 1
-        fi
-        echo "Consumed: $CONSUMED"
-        echo "PASS: Produce + consume round-trip on '$TOPIC' successful"
+        chmod +x scripts/kafka-check.sh
+        scripts/kafka-check.sh --props-file "${{ steps.creds.outputs.props_file }}"
 
     # ---------------------------------------------------------------
     # Summary
@@ -158,5 +109,4 @@ jobs:
         printf '%s\n' "| # | Check | Target |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "|---|---|---|" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| 1 | Connectivity + SSL | \`:443\` TLS cert + \`:9093\` TLS handshake |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 2 | Authentication | \`kafka-topics --list\` via \`confluentinc/cp-kafka\` + SASL/OAUTHBEARER |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 3 | Produce + Consume | topic \`${{ steps.creds.outputs.checks_topic }}\` via \`confluentinc/cp-kafka\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| 2+3 | Auth + Produce/Consume | \`scripts/kafka-check.sh\` via \`confluentinc/cp-kafka\` |" >> $GITHUB_STEP_SUMMARY

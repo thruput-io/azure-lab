@@ -47,15 +47,10 @@ jobs:
 
         BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
         DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
-        ORDERS_TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2-)
-        SR_ENDPOINT="https://$DOMAIN"
 
-        echo "domain=$DOMAIN"             >> $GITHUB_OUTPUT
-        echo "bootstrap=$BOOTSTRAP"       >> $GITHUB_OUTPUT
-        echo "props_file=$PROPS_FILE"     >> $GITHUB_OUTPUT
-        echo "sr_endpoint=$SR_ENDPOINT"   >> $GITHUB_OUTPUT
-        echo "orders_topic=$ORDERS_TOPIC" >> $GITHUB_OUTPUT
-        echo "Loaded: bootstrap=$BOOTSTRAP  topic=$ORDERS_TOPIC  sr=$SR_ENDPOINT"
+        echo "domain=$DOMAIN"         >> $GITHUB_OUTPUT
+        echo "props_file=$PROPS_FILE" >> $GITHUB_OUTPUT
+        echo "Loaded: bootstrap=$BOOTSTRAP"
 
     - name: Install Python dependencies
       run: pip install --quiet confluent-kafka azure-schemaregistry azure-schemaregistry-avroencoder azure-identity fastavro
@@ -105,7 +100,6 @@ jobs:
       run: |
         set -euo pipefail
         PROPS_FILE="${{ steps.creds.outputs.props_file }}"
-        SR_ENDPOINT="${{ steps.creds.outputs.sr_endpoint }}"
 
         TOKEN_ENDPOINT=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)
         JAAS=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)
@@ -126,11 +120,12 @@ jobs:
         echo "PASS: OAuth token acquired"
 
         echo "==> [2b] Kafka broker auth via confluent-kafka AdminClient ..."
-        python3 << PYEOF
+        python3 - "$PROPS_FILE" << 'PYEOF'
         import sys, re
         from confluent_kafka.admin import AdminClient
 
-        with open("$PROPS_FILE") as f:
+        props_file = sys.argv[1]
+        with open(props_file) as f:
             props = {}
             for line in f:
                 line = line.strip()
@@ -159,12 +154,13 @@ jobs:
         PYEOF
 
         echo "==> [2c] Azure Schema Registry credential check ..."
-        python3 << PYEOF
+        python3 - "$PROPS_FILE" << 'PYEOF'
         import re, sys
         from azure.identity import ClientSecretCredential
         from azure.schemaregistry import SchemaRegistryClient
 
-        with open("$PROPS_FILE") as f:
+        props_file = sys.argv[1]
+        with open(props_file) as f:
             props = {}
             for line in f:
                 line = line.strip()
@@ -176,138 +172,25 @@ jobs:
         client_id     = re.search(r'clientId="([^"]+)"',     jaas).group(1)
         client_secret = re.search(r'clientSecret="([^"]+)"', jaas).group(1)
         tenant_id     = re.search(r'/([^/]+)/oauth2', props["sasl.oauthbearer.token.endpoint.url"]).group(1)
-        sr_ns         = "$SR_ENDPOINT".removeprefix("https://")
+        domain        = props["bootstrap.servers"].split(":")[0]
 
         credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
-        sr_client  = SchemaRegistryClient(fully_qualified_namespace=sr_ns, credential=credential)
+        sr_client  = SchemaRegistryClient(fully_qualified_namespace=domain, credential=credential)
         schemas    = list(sr_client.list_schema_groups())
         print(f"PASS: Schema Registry auth OK — groups={schemas}")
         PYEOF
 
     # ---------------------------------------------------------------
-    # Check 3 — Avro Produce + Consume
-    # Register Avro schema, encode + produce, consume + decode.
-    # Uses official confluent-kafka + azure-schemaregistry Python libs.
+    # Check 3 — Avro Produce + Consume via scripts/schema-check.py
+    # Uses confluent-kafka + azure-schemaregistry-avroencoder.
+    # Only input: client.properties
+    # Run locally: python3 scripts/schema-check.py --props-file client.properties
     # ---------------------------------------------------------------
     - name: 'Check 3 — Avro Produce + Consume'
       id: check3
       run: |
         set -euo pipefail
-        python3 << 'PYEOF'
-        import os, sys, time, json, re
-
-        props_file   = os.environ["PROPS_FILE"]
-        topic        = os.environ["ORDERS_TOPIC"]
-        sr_endpoint  = os.environ["SR_ENDPOINT"]
-        schema_group = "orders-schema-group"
-
-        props = {}
-        with open(props_file) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, _, v = line.partition("=")
-                    props[k.strip()] = v.strip()
-
-        jaas          = props["sasl.jaas.config"]
-        client_id     = re.search(r'clientId="([^"]+)"',     jaas).group(1)
-        client_secret = re.search(r'clientSecret="([^"]+)"', jaas).group(1)
-        tenant_id     = re.search(r'/([^/]+)/oauth2', props["sasl.oauthbearer.token.endpoint.url"]).group(1)
-
-        print(f"bootstrap  : {props['bootstrap.servers']}")
-        print(f"sr_endpoint: {sr_endpoint}")
-        print(f"topic      : {topic}")
-
-        SCHEMA_NAME = "OrderPlaced"
-        SCHEMA_DEF  = json.dumps({
-            "type": "record", "name": "OrderPlaced", "namespace": "io.thruput.orders",
-            "fields": [
-                {"name": "order_id",  "type": "string"},
-                {"name": "product",   "type": "string"},
-                {"name": "quantity",  "type": "int"},
-                {"name": "timestamp", "type": "long"}
-            ]
-        })
-
-        from azure.identity import ClientSecretCredential
-        from azure.schemaregistry import SchemaRegistryClient
-        from azure.schemaregistry.encoder.avroencoder import AvroEncoder
-
-        credential   = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
-        sr_client    = SchemaRegistryClient(fully_qualified_namespace=sr_endpoint.removeprefix("https://"), credential=credential)
-
-        print(f"==> Registering schema '{SCHEMA_NAME}' in '{schema_group}' ...")
-        sp = sr_client.register_schema(group_name=schema_group, name=SCHEMA_NAME, definition=SCHEMA_DEF, format="Avro")
-        print(f"PASS: Schema registered — id={sp.id}")
-
-        encoder = AvroEncoder(client=sr_client, group_name=schema_group, auto_register=True)
-
-        kafka_conf = {
-            "bootstrap.servers":                   props["bootstrap.servers"],
-            "security.protocol":                   "SASL_SSL",
-            "sasl.mechanisms":                     "OAUTHBEARER",
-            "sasl.oauthbearer.method":             "oidc",
-            "sasl.oauthbearer.token.endpoint.url": props["sasl.oauthbearer.token.endpoint.url"],
-            "sasl.oauthbearer.client.id":          client_id,
-            "sasl.oauthbearer.client.secret":      client_secret,
-            "sasl.oauthbearer.scope":              "https://eventhubs.azure.net/.default",
-            "enable.ssl.certificate.verification": True,
-        }
-
-        from confluent_kafka import Producer, Consumer, KafkaException, KafkaError
-
-        payload       = {"order_id": "schema-test-001", "product": "test-widget", "quantity": 1, "timestamp": int(time.time() * 1000)}
-        encoded_bytes = bytes(encoder.encode(payload, schema_format="Avro"))
-
-        producer  = Producer(kafka_conf)
-        delivered = {"ok": False, "err": None}
-        def on_delivery(err, msg):
-            if err:
-                delivered["err"] = err
-            else:
-                delivered["ok"] = True
-                print(f"PASS: Produced to {msg.topic()} partition={msg.partition()} offset={msg.offset()}")
-
-        print(f"==> Producing Avro message to '{topic}' ...")
-        producer.produce(topic, value=encoded_bytes, callback=on_delivery)
-        producer.flush(timeout=30)
-        if not delivered["ok"]:
-            print(f"FAIL: Delivery failed — {delivered['err']}")
-            sys.exit(1)
-
-        consumer_conf = {
-            **kafka_conf,
-            "group.id":           f"schema-tests-{int(time.time())}",
-            "auto.offset.reset":  "latest",
-            "session.timeout.ms": 30000,
-        }
-        consumer = Consumer(consumer_conf)
-        consumer.subscribe([topic])
-        print(f"==> Consuming Avro message from '{topic}' (timeout 45s) ...")
-        deadline, consumed = time.time() + 45, None
-        while time.time() < deadline:
-            msg = consumer.poll(2.0)
-            if msg is None:
-                continue
-            if msg.error():
-                if msg.error().code() == KafkaError._PARTITION_EOF:
-                    continue
-                raise KafkaException(msg.error())
-            consumed = msg
-            break
-        consumer.close()
-        if consumed is None:
-            print(f"FAIL: No message consumed from '{topic}' within timeout")
-            sys.exit(1)
-
-        decoded = encoder.decode(consumed.value())
-        print(f"Decoded  : {decoded}")
-        print(f"PASS: Avro produce + consume round-trip successful on '{topic}'")
-        PYEOF
-      env:
-        PROPS_FILE:   ${{ steps.creds.outputs.props_file }}
-        ORDERS_TOPIC: ${{ steps.creds.outputs.orders_topic }}
-        SR_ENDPOINT:  ${{ steps.creds.outputs.sr_endpoint }}
+        python3 scripts/schema-check.py --props-file "${{ steps.creds.outputs.props_file }}"
 
     # ---------------------------------------------------------------
     # Summary
@@ -321,4 +204,4 @@ jobs:
         printf '%s\n' "|---|---|---|" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| 1 | Connectivity + SSL | \`:443\` TLS cert + \`:9093\` TLS handshake |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| 2 | Authentication | OAuth token + Kafka AdminClient + Schema Registry credential |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 3 | Avro Produce + Consume | topic \`${{ steps.creds.outputs.orders_topic }}\` via \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| 3 | Avro Produce + Consume | \`scripts/schema-check.py\` via \`${{ steps.creds.outputs.domain }}:9093\` |" >> $GITHUB_STEP_SUMMARY
