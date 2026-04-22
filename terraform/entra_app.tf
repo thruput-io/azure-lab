@@ -27,13 +27,6 @@ resource "azurerm_role_assignment" "kafka_client_receiver" {
   principal_id         = azuread_service_principal.kafka_client.object_id
 }
 
-# --- RBAC: Schema Registry Contributor ---
-resource "azurerm_role_assignment" "kafka_client_schema_registry" {
-  scope                = azurerm_eventhub_namespace.evh.id
-  role_definition_name = "Schema Registry Contributor"
-  principal_id         = azuread_service_principal.kafka_client.object_id
-}
-
 # --- Store client secret in Key Vault ---
 resource "azurerm_key_vault_secret" "kafka_client_secret" {
   name            = "kafka-client-secret"
@@ -45,10 +38,7 @@ resource "azurerm_key_vault_secret" "kafka_client_secret" {
 }
 
 # --- Store rendered client.properties in Key Vault for team retrieval ---
-# 100% Confluent-compatible configuration.
 # Kafka broker: App Gateway (port 9093), SASL/OAUTHBEARER via Entra ID.
-# Schema Registry: self-hosted Confluent SR via App Gateway (port 8081).
-#   Auth: bearer.auth.credentials.source=OAUTHBEARER with Entra ID client credentials.
 resource "azurerm_key_vault_secret" "kafka_client_properties" {
   name         = "kafka-client-properties"
   key_vault_id = azurerm_key_vault.kv.id
@@ -62,24 +52,6 @@ resource "azurerm_key_vault_secret" "kafka_client_properties" {
     "sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler",
     "sasl.oauthbearer.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
     "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"${azuread_application.kafka_client.client_id}\" clientSecret=\"${azuread_application_password.kafka_client_secret.value}\" scope=\"https://eventhubs.azure.net/.default\";",
-    "",
-    "# ============================================================",
-    "# Schema Registry — self-hosted Confluent SR via App Gateway (port 8081)",
-    "# ============================================================",
-    "schema.registry.url=https://${var.custom_domain_name}:8081",
-    "bearer.auth.credentials.source=OAUTHBEARER",
-    "bearer.auth.issuer.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
-    "bearer.auth.client.id=${azuread_application.kafka_client.client_id}",
-    "bearer.auth.client.secret=${azuread_application_password.kafka_client_secret.value}",
-    "bearer.auth.scope=https://eventhubs.azure.net/.default",
-    "",
-    "# ============================================================",
-    "# Confluent-standard Avro serializer/deserializer",
-    "# ============================================================",
-    "value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer",
-    "value.deserializer=io.confluent.kafka.serializers.KafkaAvroDeserializer",
-    "specific.avro.reader=false",
-    "value.subject.name.strategy=io.confluent.kafka.serializers.subject.TopicNameStrategy",
     "",
     "# ============================================================",
     "# Topic",
@@ -102,9 +74,4 @@ output "kafka_client_secret" {
 
 output "kafka_bootstrap_server" {
   value = "${var.custom_domain_name}:9093"
-}
-
-output "schema_registry_url" {
-  value       = "https://${var.custom_domain_name}:8081"
-  description = "Self-hosted Confluent Schema Registry URL via App Gateway (port 8081)"
 }

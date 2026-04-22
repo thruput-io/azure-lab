@@ -1,4 +1,4 @@
-# Event Hub (Topic) - Confluent naming convention: <domain>.<entity>
+# Event Hub topic naming convention: <domain>.<entity>
 resource "azurerm_eventhub" "orders_topic" {
   name              = "orders.placed"
   namespace_id      = azurerm_eventhub_namespace.evh.id
