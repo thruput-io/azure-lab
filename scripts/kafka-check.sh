@@ -7,6 +7,10 @@
 # Usage:
 #   ./scripts/kafka-check.sh --props-file /path/to/client.properties [--image <image>]
 #
+# Local run (no install needed):
+#   docker pull confluentinc/cp-kafka:7.9.0
+#   ./scripts/kafka-check.sh --props-file /path/to/client.properties
+#
 # Required keys in client.properties:
 #   bootstrap.servers, checks_topic,
 #   security.protocol, sasl.mechanism, sasl.jaas.config,
@@ -43,10 +47,14 @@ done
 
 BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 TOPIC=$(grep '^checks_topic='       "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+
+# Unique consumer group per run so --from-beginning always works
+GROUP="kafka-check-$(date -u +%Y%m%d%H%M%S)-$$"
 MSG='{"check":"kafka-check","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 
 echo "==> bootstrap.servers=${BOOTSTRAP}"
 echo "==> checks_topic=${TOPIC}"
+echo "==> consumer.group=${GROUP}"
 
 # -----------------------------------------------------------------------
 # Check A — Authentication: list topics via kafka-topics
@@ -77,10 +85,10 @@ echo "$MSG" | docker run -i --rm \
 echo "PASS: Message produced to '${TOPIC}'"
 
 # -----------------------------------------------------------------------
-# Check C — Consume
+# Check C — Consume (unique group so --from-beginning always starts fresh)
 # -----------------------------------------------------------------------
 echo ""
-echo "==> [C] Consuming message from '${TOPIC}' (timeout 45s) ..."
+echo "==> [C] Consuming message from '${TOPIC}' group='${GROUP}' (timeout 45s) ..."
 CONSUMED=$(docker run --rm \
   -v "${PROPS_FILE}:/tmp/client.properties:ro" \
   "$IMAGE" \
@@ -88,13 +96,22 @@ CONSUMED=$(docker run --rm \
     --bootstrap-server "$BOOTSTRAP" \
     --topic "$TOPIC" \
     --consumer.config /tmp/client.properties \
+    --group "$GROUP" \
     --from-beginning \
     --max-messages 1 \
-    --timeout-ms 45000 2>/dev/null || true)
+    --timeout-ms 45000 2>&1) || true
 
-if [[ -z "$CONSUMED" ]]; then
+# Strip log lines (kafka-console-consumer prints "Processed N message(s)" to stderr which
+# ends up in CONSUMED when merging; filter to keep only the JSON payload line.
+JSON_LINE=$(echo "$CONSUMED" | grep '^{' | head -1 || true)
+
+if [[ -z "$JSON_LINE" ]]; then
+  echo "--- consumer output (for debugging) ---"
+  echo "$CONSUMED"
+  echo "--- end consumer output ---"
   echo "FAIL: No message consumed from '${TOPIC}' within timeout"
   exit 1
 fi
-echo "Consumed: $CONSUMED"
+
+echo "Consumed: $JSON_LINE"
 echo "PASS: Produce + consume round-trip on '${TOPIC}' successful"
