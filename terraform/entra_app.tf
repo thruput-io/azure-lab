@@ -30,14 +30,14 @@ resource "azurerm_role_assignment" "kafka_client_receiver" {
 # --- RBAC: Schema Registry Reader ---
 resource "azurerm_role_assignment" "kafka_client_sr_reader" {
   scope                = azurerm_eventhub_namespace.evh.id
-  role_definition_name = "Azure Event Hubs Schema Registry Reader"
+  role_definition_name = "Schema Registry Reader"
   principal_id         = azuread_service_principal.kafka_client.object_id
 }
 
 # --- RBAC: Schema Registry Contributor (to register schemas) ---
 resource "azurerm_role_assignment" "kafka_client_sr_contributor" {
   scope                = azurerm_eventhub_namespace.evh.id
-  role_definition_name = "Azure Event Hubs Schema Registry Contributor"
+  role_definition_name = "Schema Registry Contributor"
   principal_id         = azuread_service_principal.kafka_client.object_id
 }
 
