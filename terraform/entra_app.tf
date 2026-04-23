@@ -137,7 +137,7 @@ resource "azuread_service_principal" "apicurio" {
 
 # --- Assign Admin role to Kafka Client (so it can register schemas) ---
 resource "azuread_app_role_assignment" "kafka_client_apicurio_admin" {
-  app_role_id         = azuread_application.apicurio.app_role[0].id # sr-admin
+  app_role_id         = { for r in azuread_application.apicurio.app_role : r.display_name => r.id }["sr-admin"]
   principal_object_id = azuread_service_principal.kafka_client.object_id
   resource_object_id  = azuread_service_principal.apicurio.object_id
 }
