@@ -123,7 +123,7 @@ jobs:
         echo "==> [2b] Kafka broker auth via confluentinc/cp-kafka kafka-topics ..."
         docker run --rm \
           -v "$PROPS_FILE:/tmp/client.properties:ro" \
-          confluentinc/cp-kafka:7.9.0 \
+          confluentinc/cp-kafka:8.2.0 \
           kafka-topics \
             --bootstrap-server "$BOOTSTRAP" \
             --command-config /tmp/client.properties \

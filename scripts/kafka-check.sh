@@ -11,7 +11,7 @@
 #   ./scripts/kafka-check.sh --props-file /path/to/client.properties
 #
 # Local run (no install needed):
-#   docker pull confluentinc/cp-kafka:7.9.0
+#   docker pull confluentinc/cp-kafka:8.2.0
 #   ./scripts/kafka-check.sh --props-file /path/to/client.properties
 #
 # Required keys in client.properties:
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 PROPS_FILE=""
-IMAGE="confluentinc/cp-kafka:7.9.0"
+IMAGE="confluentinc/cp-kafka:8.2.0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

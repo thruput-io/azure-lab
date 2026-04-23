@@ -36,4 +36,18 @@
 3. Is `client.properties` committed to git with real credentials? → **Not allowed; the committed file is a placeholder only.**
 4. Does a new script parameter bypass `client.properties` for any Kafka or Schema Registry setting? → **Not allowed.**
 
+---
 
+### Guideline: Refer to `Apicurio_schema_registry_plan.md` for Schema Registry Architecture
+
+The file `Apicurio_schema_registry_plan.md` (project root) is the authoritative plan for the Apicurio Schema Registry PoC deployment. It documents all architecture decisions, implementation steps, traffic flow, and the split between `kafka-client.properties` and `schema-client.properties`.
+
+**AI agents and contributors must read this file before:**
+- Modifying anything in `terraform/apicurio.tf`, `terraform/schema_registry.tf`, or the schema-related blocks in `terraform/entra_app.tf`.
+- Modifying `scripts/schema-check.sh` or `.github/workflows/schema-tests.yml`.
+- Changing App Gateway L7 (port 443) backend routing.
+- Adding or removing Key Vault secrets related to schema registry.
+
+**The plan must NOT be updated during implementation.** If an implementation decision deviates from the plan, record it in `deviations.md` instead. Only update the plan between implementation phases when a deliberate architectural change is agreed upon.
+
+## Read goals.md to not loose track of goals

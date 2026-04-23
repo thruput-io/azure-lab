@@ -3,7 +3,7 @@
 # Avro Schema produce + consume smoke test
 #
 # Uses official Confluent Docker images ONLY:
-#   - confluentinc/cp-schema-registry:7.9.0  (schema registration,
+#   - confluentinc/cp-schema-registry:8.2.0  (schema registration,
 #                                             avro-console-producer/consumer)
 #
 # Only input: client.properties file
@@ -19,7 +19,7 @@
 # =============================================================
 set -euo pipefail
 
-CONFLUENT_IMAGE="confluentinc/cp-schema-registry:7.9.0"
+CONFLUENT_IMAGE="confluentinc/cp-schema-registry:8.2.0"
 SCHEMA_NAME="OrderPlaced"
 SCHEMA_DEF='{"type":"record","name":"OrderPlaced","namespace":"io.thruput.orders","fields":[{"name":"order_id","type":"string"},{"name":"product","type":"string"},{"name":"quantity","type":"int"},{"name":"timestamp","type":"long"}]}'
 
