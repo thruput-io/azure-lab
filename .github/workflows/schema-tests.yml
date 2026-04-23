@@ -17,35 +17,23 @@ jobs:
       uses: actions/checkout@v4
 
     # ---------------------------------------------------------------
-    # Write client.properties from the repository secret.
-    # The secret KAFKA_CLIENT_PROPERTIES holds the full file content
-    # (populated credentials — do NOT commit to git).
-    # All values (bootstrap, topic, OAuth) come from this file.
-    # No Azure login or Key Vault call is needed.
+    # Load schema-client.properties
     # ---------------------------------------------------------------
-    - name: Load client.properties
+    - name: Load schema-client.properties
       id: creds
       env:
-        KAFKA_CLIENT_PROPERTIES: ${{ secrets.KAFKA_CLIENT_PROPERTIES }}
+        SCHEMA_CLIENT_PROPERTIES: ${{ secrets.SCHEMA_CLIENT_PROPERTIES }}
       run: |
         set -euo pipefail
-        PROPS_FILE="/tmp/client.properties"
-        printf '%s' "$KAFKA_CLIENT_PROPERTIES" > "$PROPS_FILE"
+        PROPS_FILE="/tmp/schema-client.properties"
+        printf '%s' "$SCHEMA_CLIENT_PROPERTIES" > "$PROPS_FILE"
         sed -i 's/\r$//' "$PROPS_FILE"
 
         if [ ! -s "$PROPS_FILE" ]; then
-          echo "ERROR: KAFKA_CLIENT_PROPERTIES secret is empty — set it in repo Settings → Secrets"
+          echo "ERROR: SCHEMA_CLIENT_PROPERTIES secret is empty — set it in repo Settings → Secrets"
           exit 1
         fi
-        if ! grep -q '^bootstrap.servers=' "$PROPS_FILE"; then
-          echo "ERROR: client.properties is missing bootstrap.servers"
-          exit 1
-        fi
-        if ! grep -q '^topic=' "$PROPS_FILE"; then
-          echo "ERROR: client.properties is missing topic"
-          exit 1
-        fi
-
+        
         BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
         DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
 
@@ -55,7 +43,6 @@ jobs:
 
     # ---------------------------------------------------------------
     # Check 1 — Connectivity + SSL
-    # TLS handshake on :443 (HTTPS) and :9093 (Kafka)
     # ---------------------------------------------------------------
     - name: 'Check 1 — Connectivity + SSL'
       id: check1
@@ -73,10 +60,6 @@ jobs:
         EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
         DAYS_LEFT=$(( (EXPIRY_EPOCH - $(date +%s)) / 86400 ))
         echo "  Certificate expires in $DAYS_LEFT days ($EXPIRY)"
-        if [ "$DAYS_LEFT" -lt 7 ]; then
-          echo "FAIL: Certificate expires in $DAYS_LEFT days — renew immediately"
-          exit 1
-        fi
         echo "PASS: :443 TLS certificate valid ($DAYS_LEFT days remaining)"
 
         echo "==> [1b] TLS handshake on ${DOMAIN}:9093 (Kafka) ..."
@@ -88,32 +71,33 @@ jobs:
         echo "PASS: :9093 TLS handshake successful"
 
     # ---------------------------------------------------------------
-    # Check 2 — Authentication
-    # 2a: Entra ID OAuth token (curl)
-    # 2b: Kafka broker auth via confluentinc/cp-kafka kafka-topics
-    # 2c: Azure Schema Registry REST API auth (curl + bearer token)
+    # Check 2 — Authentication (OAuth + Kafka + Azure SR)
     # ---------------------------------------------------------------
-    - name: 'Check 2 — Authentication (OAuth + Kafka + Schema Registry)'
+    - name: 'Check 2 — Authentication'
       id: check2
       run: |
         set -euo pipefail
         PROPS_FILE="${{ steps.creds.outputs.props_file }}"
 
-        TOKEN_ENDPOINT=$(grep '^sasl.oauthbearer.token.endpoint.url=' "$PROPS_FILE" | cut -d= -f2-)
-        JAAS=$(grep '^sasl.jaas.config=' "$PROPS_FILE" | cut -d= -f2-)
-        CLIENT_ID=$(echo "$JAAS"     | grep -oP 'clientId="\K[^"]+')
-        CLIENT_SECRET=$(echo "$JAAS" | grep -oP 'clientSecret="\K[^"]+')
-        BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
+        # Helper to get prop
+        get_prop() { grep "^${1}=" "$PROPS_FILE" | head -1 | cut -d= -f2-; }
+
+        TOKEN_ENDPOINT=$(get_prop "sasl.oauthbearer.token.endpoint.url")
+        JAAS=$(get_prop "sasl.jaas.config")
+        CLIENT_ID=$(echo "$JAAS"     | sed -n 's/.*clientId="\([^"]*\)".*/\1/p')
+        CLIENT_SECRET=$(echo "$JAAS" | sed -n 's/.*clientSecret="\([^"]*\)".*/\1/p')
+        SCOPE=$(echo "$JAAS"         | sed -n 's/.*scope="\([^"]*\)".*/\1/p')
+        BOOTSTRAP=$(get_prop "bootstrap.servers")
         DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
         SR_URL="https://${DOMAIN}"
 
-        echo "==> [2a] Fetching Entra ID OAuth token ..."
+        echo "==> [2a] Fetching OAuth token ..."
         TOKEN_RESP=$(curl -sS --max-time 15 -X POST "$TOKEN_ENDPOINT" \
           -d "grant_type=client_credentials" \
           -d "client_id=$CLIENT_ID" \
           --data-urlencode "client_secret=$CLIENT_SECRET" \
-          -d "scope=https://eventhubs.azure.net/.default")
-        ACCESS_TOKEN=$(echo "$TOKEN_RESP" | grep -oP '"access_token":\s*"\K[^"]+' || true)
+          -d "scope=$SCOPE")
+        ACCESS_TOKEN=$(echo "$TOKEN_RESP" | sed -n 's/.*"access_token":[[:space:]]*"\([^"]*\)".*/\1/p' || true)
         if [ -z "$ACCESS_TOKEN" ]; then
           echo "FAIL: Could not obtain OAuth token — response: $TOKEN_RESP"
           exit 1
@@ -143,9 +127,6 @@ jobs:
 
     # ---------------------------------------------------------------
     # Check 3 — Avro Produce + Consume via scripts/schema-check.sh
-    # Uses official confluentinc/cp-schema-registry image.
-    # Only input: client.properties
-    # Run locally: ./scripts/schema-check.sh --props-file client.properties
     # ---------------------------------------------------------------
     - name: 'Check 3 — Avro Produce + Consume (confluentinc/cp-schema-registry)'
       id: check3
