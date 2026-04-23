@@ -52,25 +52,21 @@ resource "azurerm_key_vault_secret" "kafka_client_secret" {
 }
 
 # --- Store rendered client.properties in Key Vault for team retrieval ---
-# Kafka broker: App Gateway (port 9093), SASL/OAUTHBEARER via Entra ID.
+# Kafka broker: App Gateway (port 9093), SASL/PLAIN with $ConnectionString.
+# This file is the single source of truth: all parameters used by kafka-check.sh
+# and the Confluent console (cp-kafka) come from here with no extra construction.
 resource "azurerm_key_vault_secret" "kafka_client_properties" {
   name         = "kafka-client-properties"
   key_vault_id = azurerm_key_vault.kv.id
   value = join("\n", [
     "# ============================================================",
     "# Kafka broker — via Application Gateway (public endpoint)",
+    "# SASL/PLAIN with $ConnectionString (Azure Event Hubs for Kafka)",
     "# ============================================================",
     "bootstrap.servers=${var.custom_domain_name}:9093",
     "security.protocol=SASL_SSL",
-    "sasl.mechanism=OAUTHBEARER",
-    "sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.secured.OAuthBearerLoginCallbackHandler",
-    "sasl.oauthbearer.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
-    "sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required clientId=\"${azuread_application.kafka_client.client_id}\" clientSecret=\"${azuread_application_password.kafka_client_secret.value}\" scope=\"https://eventhubs.azure.net/.default\";",
-    "",
-    "# ============================================================",
-    "# Schema Registry (Confluent-compatible API via App Gateway)",
-    "# ============================================================",
-    "schema.registry.url=https://${var.custom_domain_name}",
+    "sasl.mechanism=PLAIN",
+    "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$ConnectionString\" password=\"${azurerm_eventhub_namespace.evh.default_primary_connection_string}\";",
     "",
     "# ============================================================",
     "# Topics",
@@ -79,9 +75,16 @@ resource "azurerm_key_vault_secret" "kafka_client_properties" {
     "checks_topic=${azurerm_eventhub.checks_topic.name}",
     "",
     "# ============================================================",
-    "# Test credentials (SASL/PLAIN $ConnectionString for cp-kafka tests)",
+    "# Schema Registry (Confluent-compatible API via App Gateway)",
     "# ============================================================",
-    "sasl.connection.string=${azurerm_eventhub_namespace.evh.default_primary_connection_string}",
+    "schema.registry.url=https://${var.custom_domain_name}",
+    "",
+    "# ============================================================",
+    "# OAuth credentials (Entra ID — used by schema-check.sh for SR auth)",
+    "# ============================================================",
+    "oauth.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
+    "oauth.client.id=${azuread_application.kafka_client.client_id}",
+    "oauth.client.secret=${azuread_application_password.kafka_client_secret.value}",
   ])
 
   depends_on = [azurerm_role_assignment.deployer_kv_secrets_officer]
