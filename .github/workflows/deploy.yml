@@ -93,7 +93,7 @@ jobs:
 
     - name: Terraform Apply
       if: github.ref == 'refs/heads/main'
-      run: terraform apply -auto-approve -input=false
+      run: terraform apply -auto-approve -input=false -target=azurerm_container_registry.acr
       env:
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
@@ -117,6 +117,17 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
+    - name: Terraform Apply (full)
+      if: github.ref == 'refs/heads/main'
+      run: terraform apply -auto-approve -input=false
+      env:
+        TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
+        TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
+        TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
     - name: Update GitHub secrets from Key Vault
       if: github.ref == 'refs/heads/main'
       run: |
