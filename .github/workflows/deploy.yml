@@ -109,7 +109,7 @@ jobs:
         set -euo pipefail
         ACR_NAME="$(terraform output -raw acr_name)"
         echo "Importing apicurio/apicurio-registry:3.2.2 into $ACR_NAME (server-side)..."
-        az acr import --name "$ACR_NAME" --source docker.io/apicurio/apicurio-registry:3.2.2 --image apicurio/apicurio-registry:3.2.2 --force
+        az acr import --name "$ACR_NAME" --source quay.io/apicurio/apicurio-registry:3.2.2 --image apicurio/apicurio-registry:3.2.2 --force
         echo "Import complete."
       env:
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
