@@ -80,7 +80,7 @@ resource "azurerm_key_vault_secret" "schema_client_properties" {
     "# ============================================================",
     "# Schema Registry (Confluent-compatible API via App Gateway)",
     "# ============================================================",
-    "schema.registry.url=https://${var.custom_domain_name}",
+    "schema.registry.url=https://${var.custom_domain_name}/apis/ccompat/v7",
     "",
     "# ============================================================",
     "# OAuth credentials (Entra ID — used by client for SR auth)",
@@ -88,9 +88,58 @@ resource "azurerm_key_vault_secret" "schema_client_properties" {
     "oauth.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
     "oauth.client.id=${azuread_application.kafka_client.client_id}",
     "oauth.client.secret=${azuread_application_password.kafka_client_secret.value}",
+    "oauth.scope=api://${azuread_application.apicurio.client_id}/Registry.Access",
   ])
 
   depends_on = [azurerm_role_assignment.deployer_kv_secrets_officer]
+}
+
+# --- Apicurio App Registration ---
+resource "azuread_application" "apicurio" {
+  display_name     = "app-apicurio-registry"
+  identifier_uris  = ["api://app-apicurio-registry-${data.azurerm_client_config.current.client_id}"]
+
+  app_role {
+    allowed_member_types = ["Application", "User"]
+    description          = "Full administrative access to the registry."
+    display_name         = "sr-admin"
+    enabled              = true
+    id                   = "49666f21-169b-4408-8924-f58479e0802c"
+    value                = "sr-admin"
+  }
+
+  app_role {
+    allowed_member_types = ["Application", "User"]
+    description          = "Read-only access to the registry."
+    display_name         = "sr-readonly"
+    enabled              = true
+    id                   = "f310f3c5-849c-47a3-b40e-6f8e77a16f0d"
+    value                = "sr-readonly"
+  }
+
+  api {
+    oauth2_permission_scope {
+      admin_consent_description  = "Allow the application to access the registry."
+      admin_consent_display_name = "Access Registry"
+      enabled                    = true
+      id                         = "1e0c40e5-7b56-4c92-95f0-621e25e1a3c7"
+      type                       = "User"
+      user_consent_description   = "Allow the application to access the registry on your behalf."
+      user_consent_display_name  = "Access Registry"
+      value                      = "Registry.Access"
+    }
+  }
+}
+
+resource "azuread_service_principal" "apicurio" {
+  client_id = azuread_application.apicurio.client_id
+}
+
+# --- Assign Admin role to Kafka Client (so it can register schemas) ---
+resource "azuread_app_role_assignment" "kafka_client_apicurio_admin" {
+  app_role_id         = azuread_application.apicurio.app_role[0].id # sr-admin
+  principal_object_id = azuread_service_principal.kafka_client.object_id
+  resource_object_id  = azuread_service_principal.apicurio.object_id
 }
 
 # --- Outputs ---

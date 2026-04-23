@@ -57,19 +57,24 @@ resource "azurerm_application_gateway" "network" {
   }
 
   backend_address_pool {
-    name  = local.backend_address_pool_name
+    name  = "evh-beap"
     fqdns = [format("%s.servicebus.windows.net", azurerm_eventhub_namespace.evh.name)]
   }
 
-  # L7 Settings (HTTPS)
+  backend_address_pool {
+    name         = "apicurio-beap"
+    ip_addresses = [azurerm_container_group.apicurio.ip_address]
+  }
+
+  # L7 Settings (HTTP to Apicurio 8080)
   backend_http_settings {
-    name                                = local.http_setting_name
+    name                                = "apicurio-be-htst"
     cookie_based_affinity               = "Disabled"
     path                                = "/"
-    port                                = 443
-    protocol                            = "Https"
+    port                                = 8080
+    protocol                            = "Http"
     request_timeout                     = 60
-    pick_host_name_from_backend_address = true
+    pick_host_name_from_backend_address = false
   }
 
   # L4 Backend (TCP/TLS Proxy)
@@ -129,8 +134,8 @@ resource "azurerm_application_gateway" "network" {
     priority                   = 100
     rule_type                  = "Basic"
     http_listener_name         = local.listener_name
-    backend_address_pool_name  = local.backend_address_pool_name
-    backend_http_settings_name = local.http_setting_name
+    backend_address_pool_name  = "apicurio-beap"
+    backend_http_settings_name = "apicurio-be-htst"
   }
 
   # L4 Rule
@@ -138,7 +143,7 @@ resource "azurerm_application_gateway" "network" {
     name                      = "amqp-rule"
     priority                  = 110
     listener_name             = "amqp-listener"
-    backend_address_pool_name = local.backend_address_pool_name
+    backend_address_pool_name = "evh-beap"
     backend_name              = "amqp-be-settings"
   }
 
@@ -146,7 +151,7 @@ resource "azurerm_application_gateway" "network" {
     name                      = "kafka-rule"
     priority                  = 120
     listener_name             = "kafka-listener"
-    backend_address_pool_name = local.backend_address_pool_name
+    backend_address_pool_name = "evh-beap"
     backend_name              = "kafka-be-settings"
   }
 
