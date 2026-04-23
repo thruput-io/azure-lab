@@ -12,28 +12,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Write client.properties from secret
+    - name: Write properties files from secrets
       env:
         KAFKA_CLIENT_PROPERTIES: ${{ secrets.KAFKA_CLIENT_PROPERTIES }}
+        SCHEMA_CLIENT_PROPERTIES: ${{ secrets.SCHEMA_CLIENT_PROPERTIES }}
       run: |
         set -euo pipefail
-        printf '%s' "$KAFKA_CLIENT_PROPERTIES" > client.properties
-
-        if [ ! -s client.properties ]; then
+        
+        # Kafka properties
+        printf '%s' "$KAFKA_CLIENT_PROPERTIES" > kafka-client.properties
+        if [ ! -s kafka-client.properties ]; then
           echo "ERROR: KAFKA_CLIENT_PROPERTIES secret is empty."
           exit 1
         fi
-
-        if ! grep -q '^bootstrap\.servers=' client.properties; then
-          echo "ERROR: client.properties missing required bootstrap.servers entry."
+        if ! grep -q '^bootstrap\.servers=' kafka-client.properties; then
+          echo "ERROR: kafka-client.properties missing required bootstrap.servers entry."
           exit 1
         fi
 
-        echo "client.properties validated successfully"
+        # Schema properties
+        printf '%s' "$SCHEMA_CLIENT_PROPERTIES" > schema-client.properties
+        if [ ! -s schema-client.properties ]; then
+          echo "ERROR: SCHEMA_CLIENT_PROPERTIES secret is empty."
+          exit 1
+        fi
+        if ! grep -q '^schema\.registry\.url=' schema-client.properties; then
+          echo "ERROR: schema-client.properties missing required schema.registry.url entry."
+          exit 1
+        fi
 
-    - name: Upload client.properties as artifact
+        echo "Properties files validated successfully"
+
+    - name: Upload properties as artifacts
       uses: actions/upload-artifact@v4
       with:
         name: client-properties
-        path: client.properties
+        path: |
+          kafka-client.properties
+          schema-client.properties
         retention-days: 10

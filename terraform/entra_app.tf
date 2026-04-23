@@ -53,8 +53,7 @@ resource "azurerm_key_vault_secret" "kafka_client_secret" {
 
 # --- Store rendered client.properties in Key Vault for team retrieval ---
 # Kafka broker: App Gateway (port 9093), SASL/PLAIN with $ConnectionString.
-# This file is the single source of truth: all parameters used by kafka-check.sh
-# and the Confluent console (cp-kafka) come from here with no extra construction.
+# This file is the single source of truth for Kafka connectivity.
 resource "azurerm_key_vault_secret" "kafka_client_properties" {
   name         = "kafka-client-properties"
   key_vault_id = azurerm_key_vault.kv.id
@@ -73,6 +72,24 @@ resource "azurerm_key_vault_secret" "kafka_client_properties" {
     "# ============================================================",
     "topic=${azurerm_eventhub.orders_topic.name}",
     "checks_topic=${azurerm_eventhub.checks_topic.name}",
+  ])
+
+  depends_on = [azurerm_role_assignment.deployer_kv_secrets_officer]
+}
+
+# --- Store rendered schema-client.properties in Key Vault ---
+# Self-contained properties for Avro clients: Kafka broker + SR URL + OAuth.
+resource "azurerm_key_vault_secret" "schema_client_properties" {
+  name         = "schema-client-properties"
+  key_vault_id = azurerm_key_vault.kv.id
+  value = join("\n", [
+    "# ============================================================",
+    "# Kafka broker (needed by Avro producer/consumer)",
+    "# ============================================================",
+    "bootstrap.servers=${var.custom_domain_name}:9093",
+    "security.protocol=SASL_SSL",
+    "sasl.mechanism=PLAIN",
+    "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$ConnectionString\" password=\"${azurerm_eventhub_namespace.evh.default_primary_connection_string}\";",
     "",
     "# ============================================================",
     "# Schema Registry (Confluent-compatible API via App Gateway)",
@@ -80,7 +97,7 @@ resource "azurerm_key_vault_secret" "kafka_client_properties" {
     "schema.registry.url=https://${var.custom_domain_name}",
     "",
     "# ============================================================",
-    "# OAuth credentials (Entra ID — used by schema-check.sh for SR auth)",
+    "# OAuth credentials (Entra ID — used by client for SR auth)",
     "# ============================================================",
     "oauth.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
     "oauth.client.id=${azuread_application.kafka_client.client_id}",
