@@ -1,5 +1,5 @@
 resource "azurerm_container_group" "apicurio" {
-  name                = "aci-apicurio-v2"
+  name                = "aci-apicurio"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
   ip_address_type     = "Private"
@@ -8,7 +8,7 @@ resource "azurerm_container_group" "apicurio" {
 
   container {
     name   = "postgres"
-    image  = "postgres:16-alpine"
+    image  = "mcr.microsoft.com/mirror/docker/library/postgres:16-alpine" # Use MCR mirror for official postgres
     cpu    = "0.5"
     memory = "0.5"
 
@@ -26,7 +26,7 @@ resource "azurerm_container_group" "apicurio" {
 
   container {
     name   = "apicurio-registry"
-    image  = "apicurio/apicurio-registry-sql:3.0.5.Final" # Try different tag
+    image  = "apicurio/apicurio-registry-sql:3.0.6.Final"
     cpu    = "1.0"
     memory = "1.5"
 
