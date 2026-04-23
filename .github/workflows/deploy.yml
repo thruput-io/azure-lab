@@ -102,6 +102,20 @@ jobs:
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
+    - name: Import Apicurio image into ACR
+      if: github.ref == 'refs/heads/main'
+      working-directory: ./terraform
+      run: |
+        set -euo pipefail
+        ACR_NAME="$(terraform output -raw acr_name)"
+        echo "Importing apicurio/apicurio-registry:3.2.2 into $ACR_NAME (server-side)..."
+        az acr import --name "$ACR_NAME" --source docker.io/apicurio/apicurio-registry:3.2.2 --image apicurio/apicurio-registry:3.2.2 --force
+        echo "Import complete."
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
 
     - name: Update GitHub secrets from Key Vault
       if: github.ref == 'refs/heads/main'

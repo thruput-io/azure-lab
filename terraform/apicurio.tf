@@ -43,5 +43,4 @@ resource "azurerm_container_group" "apicurio" {
     environment = "poc"
   }
 
-  depends_on = [null_resource.acr_import_apicurio]
 }
