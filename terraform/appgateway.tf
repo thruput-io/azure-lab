@@ -70,7 +70,6 @@ resource "azurerm_application_gateway" "network" {
   backend_http_settings {
     name                                = "apicurio-be-htst"
     cookie_based_affinity               = "Disabled"
-    path                                = "/"
     port                                = 8080
     protocol                            = "Http"
     request_timeout                     = 60

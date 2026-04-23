@@ -8,7 +8,7 @@ resource "azurerm_container_group" "apicurio" {
 
   container {
     name   = "postgres"
-    image  = "mcr.microsoft.com/mirror/docker/library/postgres:16-alpine" # Use MCR mirror for official postgres
+    image  = "postgres:16-alpine"
     cpu    = "0.5"
     memory = "0.5"
 
@@ -26,7 +26,7 @@ resource "azurerm_container_group" "apicurio" {
 
   container {
     name   = "apicurio-registry"
-    image  = "ghcr.io/apicurio/apicurio-registry-sql:3.0.6.Final"
+    image  = "apicurio/apicurio-registry:3.0.6"
     cpu    = 1.0
     memory = "1.5"
 
@@ -36,6 +36,8 @@ resource "azurerm_container_group" "apicurio" {
     }
 
     environment_variables = {
+      APICURIO_STORAGE_KIND        = "sql"
+      APICURIO_STORAGE_SQL_KIND    = "postgresql"
       APICURIO_DATASOURCE_URL      = "jdbc:postgresql://localhost:5432/apicuriodb"
       APICURIO_DATASOURCE_USERNAME = "apicurio"
       APICURIO_DATASOURCE_PASSWORD = "password"
