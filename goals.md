@@ -1,6 +1,8 @@
 # Objectives for this setup
-    -   Kafka client compatibility using standard client libraries. First consumer is Pega Cloud and will not provide any custom jars.
-    -   Use JSON payloads with secure Kafka connectivity.
+    -   Make a infra setup that offers "Kafka client compatibility" using standard client libraries. First consumer is Pega Cloud.
+    -   Find a config of azure event hub and api gateway that can be used for external parties.
     -   Production grade security
-    -   No dependency on third proxies
-    
+    -   Favour use of azure native products
+    -   Second use open source products
+
+
