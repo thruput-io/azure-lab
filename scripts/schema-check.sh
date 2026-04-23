@@ -46,12 +46,31 @@ get_prop() {
 
 BOOTSTRAP=$(get_prop "bootstrap.servers")
 SR_URL=$(get_prop "schema.registry.url")
-TOKEN_ENDPOINT=$(get_prop "sasl.oauthbearer.token.endpoint.url")
-JAAS=$(get_prop "sasl.jaas.config")
 
-CLIENT_ID=$(echo "$JAAS"     | sed -n 's/.*clientId="\([^"]*\)".*/\1/p')
-CLIENT_SECRET=$(echo "$JAAS" | sed -n 's/.*clientSecret="\([^"]*\)".*/\1/p')
-SCOPE=$(echo "$JAAS"         | sed -n 's/.*scope="\([^"]*\)".*/\1/p')
+# Try new oauth keys first, then fallback to SASL keys for baseline
+TOKEN_ENDPOINT=$(get_prop "oauth.token.endpoint.url")
+if [ -z "$TOKEN_ENDPOINT" ]; then
+  TOKEN_ENDPOINT=$(get_prop "sasl.oauthbearer.token.endpoint.url")
+fi
+
+CLIENT_ID=$(get_prop "oauth.client.id")
+CLIENT_SECRET=$(get_prop "oauth.client.secret")
+SCOPE=$(get_prop "oauth.scope")
+
+if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
+  JAAS=$(get_prop "sasl.jaas.config")
+  if [ -n "$JAAS" ]; then
+    CLIENT_ID=$(echo "$JAAS"     | sed -n 's/.*clientId="\([^"]*\)".*/\1/p')
+    CLIENT_SECRET=$(echo "$JAAS" | sed -n 's/.*clientSecret="\([^"]*\)".*/\1/p')
+    if [ -z "$SCOPE" ]; then
+      SCOPE=$(echo "$JAAS"       | sed -n 's/.*scope="\([^"]*\)".*/\1/p')
+    fi
+  fi
+fi
+
+if [ -z "$SCOPE" ]; then
+  SCOPE="https://eventhubs.azure.net/.default"
+fi
 
 for var in BOOTSTRAP SR_URL TOKEN_ENDPOINT CLIENT_ID CLIENT_SECRET SCOPE; do
   if [ -z "${!var}" ]; then
@@ -97,6 +116,9 @@ echo "==> [2] Registering Avro schema '${SCHEMA_NAME}' ..."
 ESCAPED_SCHEMA_DEF=$(echo "$SCHEMA_DEF" | sed 's/"/\\"/g')
 CONFLUENT_SCHEMA_PAYLOAD="{\"schema\":\"$ESCAPED_SCHEMA_DEF\"}"
 
+# Use absolute URL to handle potential App Gateway path issues
+# Apicurio uses /subjects/...
+# Azure EH SR also uses /subjects/... in its Confluent-compatible mode
 REGISTER_RESP=$(curl -sS --max-time 15 \
   -X POST "${SR_URL}/subjects/${SCHEMA_NAME}/versions" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \

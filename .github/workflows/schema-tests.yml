@@ -1,4 +1,4 @@
-name: 'Schema Tests (Avro + Azure EH Schema Registry)'
+name: 'Schema Tests (Avro + Apicurio Schema Registry)'
 
 on:
   workflow_dispatch:
@@ -71,9 +71,9 @@ jobs:
         echo "PASS: :9093 TLS handshake successful"
 
     # ---------------------------------------------------------------
-    # Check 2 — Authentication (OAuth + Kafka + Azure SR)
+    # Check 2 — Authentication (OAuth + Kafka)
     # ---------------------------------------------------------------
-    - name: 'Check 2 — Authentication'
+    - name: 'Check 2 — Authentication (OAuth + Kafka)'
       id: check2
       run: |
         set -euo pipefail
@@ -82,14 +82,12 @@ jobs:
         # Helper to get prop
         get_prop() { grep "^${1}=" "$PROPS_FILE" | head -1 | cut -d= -f2-; }
 
-        TOKEN_ENDPOINT=$(get_prop "sasl.oauthbearer.token.endpoint.url")
-        JAAS=$(get_prop "sasl.jaas.config")
-        CLIENT_ID=$(echo "$JAAS"     | sed -n 's/.*clientId="\([^"]*\)".*/\1/p')
-        CLIENT_SECRET=$(echo "$JAAS" | sed -n 's/.*clientSecret="\([^"]*\)".*/\1/p')
-        SCOPE=$(echo "$JAAS"         | sed -n 's/.*scope="\([^"]*\)".*/\1/p')
+        TOKEN_ENDPOINT=$(get_prop "oauth.token.endpoint.url")
+        CLIENT_ID=$(get_prop "oauth.client.id")
+        CLIENT_SECRET=$(get_prop "oauth.client.secret")
         BOOTSTRAP=$(get_prop "bootstrap.servers")
-        DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
-        SR_URL="https://${DOMAIN}"
+        SCOPE=$(get_prop "oauth.scope")
+        if [ -z "$SCOPE" ]; then SCOPE="https://eventhubs.azure.net/.default"; fi
 
         echo "==> [2a] Fetching OAuth token ..."
         TOKEN_RESP=$(curl -sS --max-time 15 -X POST "$TOKEN_ENDPOINT" \
@@ -114,22 +112,6 @@ jobs:
             --list \
           && echo "PASS: Kafka broker auth OK"
 
-        echo "==> [2c] Azure Schema Registry REST API auth ..."
-        # Disable exit on error to capture the response even if curl fails
-        set +e
-        SR_RESP=$(curl -sS --max-time 15 \
-          -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-          "${SR_URL}/\$schemagroups")
-        CURL_EXIT=$?
-        set -e
-        
-        if [ $CURL_EXIT -eq 0 ] && echo "$SR_RESP" | grep -q '"value"'; then
-          echo "PASS: Schema Registry auth OK — groups listed"
-        else
-          echo "FAIL: Schema Registry auth failed (exit $CURL_EXIT) — response: $SR_RESP"
-          exit 1
-        fi
-
     # ---------------------------------------------------------------
     # Check 3 — Avro Produce + Consume via scripts/schema-check.sh
     # ---------------------------------------------------------------
@@ -151,5 +133,5 @@ jobs:
         printf '%s\n' "| # | Check | Target |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "|---|---|---|" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| 1 | Connectivity + SSL | \`:443\` TLS cert + \`:9093\` TLS handshake |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 2 | Authentication | OAuth token + Kafka \`kafka-topics\` + Schema Registry REST |" >> $GITHUB_STEP_SUMMARY
+        printf '%s\n' "| 2 | Authentication | OAuth token + Kafka \`kafka-topics\` |" >> $GITHUB_STEP_SUMMARY
         printf '%s\n' "| 3 | Avro Produce + Consume | \`scripts/schema-check.sh\` via \`confluentinc/cp-schema-registry\` |" >> $GITHUB_STEP_SUMMARY
