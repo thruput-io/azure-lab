@@ -59,4 +59,6 @@ resource "azurerm_container_group" "apicurio" {
   tags = {
     environment = "poc"
   }
+
+  depends_on = [azurerm_subnet_nat_gateway_association.aci_subnet_nat]
 }
