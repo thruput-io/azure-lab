@@ -62,18 +62,18 @@ resource "azurerm_application_gateway" "network" {
   }
 
   backend_address_pool {
-    name  = "apicurio-beap"
-    fqdns = [azurerm_linux_web_app.apicurio.default_hostname]
+    name         = "apicurio-beap"
+    ip_addresses = [azurerm_container_group.apicurio.ip_address]
   }
 
-  # L7 Settings (HTTPS to Apicurio App Service)
+  # L7 Settings (HTTP to Apicurio ACI :8080)
   backend_http_settings {
     name                                = "apicurio-be-htst"
     cookie_based_affinity               = "Disabled"
-    port                                = 443
-    protocol                            = "Https"
+    port                                = 8080
+    protocol                            = "Http"
     request_timeout                     = 60
-    pick_host_name_from_backend_address = true
+    pick_host_name_from_backend_address = false
   }
 
   # L4 Backend (TCP/TLS Proxy)
