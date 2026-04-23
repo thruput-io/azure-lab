@@ -97,7 +97,7 @@ resource "azurerm_key_vault_secret" "schema_client_properties" {
 # --- Apicurio App Registration ---
 resource "azuread_application" "apicurio" {
   display_name     = "app-apicurio-registry"
-  identifier_uris  = ["api://app-apicurio-registry-${data.azurerm_client_config.current.client_id}"]
+  identifier_uris  = ["api://${azuread_application.apicurio.client_id}"] # Use client_id as identifier URI
 
   app_role {
     allowed_member_types = ["Application", "User"]
