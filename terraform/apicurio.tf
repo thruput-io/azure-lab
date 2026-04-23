@@ -2,9 +2,9 @@ resource "azurerm_container_group" "apicurio" {
   name                = "aci-apicurio"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
-  ip_address_type     = "Private"
+  ip_address_type     = "Public"
+  dns_name_label      = "apicurio-lab"
   os_type             = "Linux"
-  subnet_ids          = [azurerm_subnet.aci_subnet.id]
 
   container {
     name   = "postgres"
@@ -60,5 +60,4 @@ resource "azurerm_container_group" "apicurio" {
     environment = "poc"
   }
 
-  depends_on = [azurerm_subnet_nat_gateway_association.aci_subnet_nat]
 }
