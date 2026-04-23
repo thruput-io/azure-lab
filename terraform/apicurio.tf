@@ -26,8 +26,8 @@ resource "azurerm_container_group" "apicurio" {
 
   container {
     name   = "apicurio-registry"
-    image  = "apicurio/apicurio-registry-sql:3.0.6.Final"
-    cpu    = "1.0"
+    image  = "apicurio/apicurio-registry-sql:3.0.1.Final"
+    cpu    = 1.0
     memory = "1.5"
 
     ports {
