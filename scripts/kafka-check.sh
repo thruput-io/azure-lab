@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # Kafka connectivity + auth + produce/consume check.
-# Uses the official confluentinc/cp-kafka image with SASL/PLAIN + $ConnectionString.
+# Uses the official confluentinc/cp-kafka image.
 #
-# Azure Event Hubs for Kafka officially supports SASL/PLAIN with:
-#   username = "$ConnectionString"
-#   password = <EventHub namespace primary connection string>
-# This is the tested and supported authentication path for Kafka CLI tools.
-#
-# Only input: client.properties
+# client.properties is the single source of truth — all Kafka settings
+# (bootstrap.servers, security.protocol, sasl.mechanism, sasl.jaas.config,
+# checks_topic) come from that file and are passed directly to cp-kafka
+# with no additional parameter construction.
 #
 # Usage:
 #   ./scripts/kafka-check.sh --props-file /path/to/client.properties
@@ -17,9 +15,11 @@
 #   ./scripts/kafka-check.sh --props-file /path/to/client.properties
 #
 # Required keys in client.properties:
-#   bootstrap.servers        — <domain>:9093
-#   checks_topic             — Kafka topic for this check
-#   sasl.connection.string   — EventHub namespace primary connection string
+#   bootstrap.servers   — <domain>:9093
+#   checks_topic        — Kafka topic for this check
+#   security.protocol   — e.g. SASL_SSL
+#   sasl.mechanism      — e.g. PLAIN
+#   sasl.jaas.config    — full JAAS entry for the chosen mechanism
 
 set -euo pipefail
 
@@ -41,30 +41,18 @@ if [[ ! -s "$PROPS_FILE" ]]; then
   echo "ERROR: client.properties not found or empty: $PROPS_FILE"; exit 1
 fi
 
-for key in bootstrap.servers checks_topic sasl.connection.string; do
+for key in bootstrap.servers checks_topic security.protocol sasl.mechanism sasl.jaas.config; do
   if ! grep -q "^${key}=" "$PROPS_FILE"; then
     echo "ERROR: client.properties missing required key: ${key}"; exit 1
   fi
 done
 
-BOOTSTRAP=$(grep '^bootstrap.servers='      "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-TOPIC=$(grep '^checks_topic='              "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-CONNECTION_STRING=$(grep '^sasl.connection.string=' "$PROPS_FILE" | cut -d= -f2-)
+BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+TOPIC=$(grep     '^checks_topic='      "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
 
 echo "==> bootstrap.servers=${BOOTSTRAP}"
 echo "==> checks_topic=${TOPIC}"
 echo "==> image=${IMAGE}"
-
-# -----------------------------------------------------------------------
-# Build a SASL/PLAIN client.properties using the EH connection string.
-# Azure EH officially supports: username="$ConnectionString" password=<connection-string>
-# -----------------------------------------------------------------------
-PLAIN_PROPS="/tmp/kafka-plain-$$.properties"
-cat > "$PLAIN_PROPS" <<EOF
-security.protocol=SASL_SSL
-sasl.mechanism=PLAIN
-sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="\$ConnectionString" password="${CONNECTION_STRING}";
-EOF
 
 # Unique consumer group per run
 GROUP="kafka-check-$(date -u +%Y%m%dT%H%M%S)-$$"
@@ -73,16 +61,13 @@ MSG='{"check":"kafka-check","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
 echo "==> consumer.group=${GROUP}"
 
 # -----------------------------------------------------------------------
-# Check 1 (SSL) already done by workflow — skipped here
-# -----------------------------------------------------------------------
-
-# -----------------------------------------------------------------------
 # Check 2 — Auth: list topics
+# client.properties is passed directly — no extra construction needed.
 # -----------------------------------------------------------------------
 echo ""
 echo "==> [2] Authenticating with Kafka broker (kafka-topics --list) ..."
 docker run --rm \
-  -v "${PLAIN_PROPS}:/tmp/client.properties:ro" \
+  -v "${PROPS_FILE}:/tmp/client.properties:ro" \
   "$IMAGE" \
   kafka-topics \
     --bootstrap-server "$BOOTSTRAP" \
@@ -96,7 +81,7 @@ echo "PASS: Kafka auth OK (topic list succeeded)"
 echo ""
 echo "==> [3] Producing message to '${TOPIC}' ..."
 echo "$MSG" | docker run -i --rm \
-  -v "${PLAIN_PROPS}:/tmp/client.properties:ro" \
+  -v "${PROPS_FILE}:/tmp/client.properties:ro" \
   "$IMAGE" \
   kafka-console-producer \
     --bootstrap-server "$BOOTSTRAP" \
@@ -110,7 +95,7 @@ echo "PASS: Message produced to '${TOPIC}'"
 echo ""
 echo "==> [4] Consuming message from '${TOPIC}' (group='${GROUP}', timeout 45s) ..."
 CONSUMED=$(docker run --rm \
-  -v "${PLAIN_PROPS}:/tmp/client.properties:ro" \
+  -v "${PROPS_FILE}:/tmp/client.properties:ro" \
   "$IMAGE" \
   kafka-console-consumer \
     --bootstrap-server "$BOOTSTRAP" \
@@ -120,8 +105,6 @@ CONSUMED=$(docker run --rm \
     --from-beginning \
     --max-messages 1 \
     --timeout-ms 45000 2>&1) || true
-
-rm -f "$PLAIN_PROPS"
 
 # Filter out Java log lines; keep the JSON payload
 JSON_LINE=$(echo "$CONSUMED" | grep -v '^[[:space:]]*$' | grep -v '^\[' | grep '^{' | head -1 || true)
