@@ -14,10 +14,3 @@ resource "azurerm_eventhub" "checks_topic" {
   message_retention = 1
 }
 
-# Schema Group - Avro with Forward compatibility
-resource "azurerm_eventhub_namespace_schema_group" "orders_schema_group" {
-  name                 = "orders-schema-group"
-  namespace_id         = azurerm_eventhub_namespace.evh.id
-  schema_compatibility = "Forward"
-  schema_type          = "Avro"
-}

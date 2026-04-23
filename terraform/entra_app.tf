@@ -27,20 +27,6 @@ resource "azurerm_role_assignment" "kafka_client_receiver" {
   principal_id         = azuread_service_principal.kafka_client.object_id
 }
 
-# --- RBAC: Schema Registry Reader ---
-resource "azurerm_role_assignment" "kafka_client_sr_reader" {
-  scope                = azurerm_eventhub_namespace.evh.id
-  role_definition_name = "Schema Registry Reader"
-  principal_id         = azuread_service_principal.kafka_client.object_id
-}
-
-# --- RBAC: Schema Registry Contributor (to register schemas) ---
-resource "azurerm_role_assignment" "kafka_client_sr_contributor" {
-  scope                = azurerm_eventhub_namespace.evh.id
-  role_definition_name = "Schema Registry Contributor"
-  principal_id         = azuread_service_principal.kafka_client.object_id
-}
-
 # --- Store client secret in Key Vault ---
 resource "azurerm_key_vault_secret" "kafka_client_secret" {
   name            = "kafka-client-secret"
