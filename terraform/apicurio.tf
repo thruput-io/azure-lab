@@ -26,7 +26,7 @@ resource "azurerm_container_group" "apicurio" {
 
   container {
     name   = "apicurio-registry"
-    image  = "apicurio/apicurio-registry-sql:3.0.6.Final" # 3.x SQL variant
+    image  = "apicurio/apicurio-registry-sql:3.0.5.Final" # Try different tag
     cpu    = "1.0"
     memory = "1.5"
 
