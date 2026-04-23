@@ -8,14 +8,14 @@ resource "azurerm_container_group" "apicurio" {
 
   container {
     name   = "postgres"
-    image  = "postgres:16-alpine"
+    image  = "mcr.microsoft.com/oss/bitnami/postgresql:16.2.0" # Use MCR mirror
     cpu    = "0.5"
     memory = "0.5"
 
     environment_variables = {
-      POSTGRES_DB       = "apicuriodb"
-      POSTGRES_USER     = "apicurio"
-      POSTGRES_PASSWORD = "password" # PoC only, ephemeral
+      POSTGRESQL_DATABASE = "apicuriodb"
+      POSTGRESQL_USERNAME = "apicurio"
+      POSTGRESQL_PASSWORD = "password" # PoC only, ephemeral
     }
 
     ports {
