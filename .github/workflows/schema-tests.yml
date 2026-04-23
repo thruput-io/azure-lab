@@ -115,13 +115,18 @@ jobs:
           && echo "PASS: Kafka broker auth OK"
 
         echo "==> [2c] Azure Schema Registry REST API auth ..."
+        # Disable exit on error to capture the response even if curl fails
+        set +e
         SR_RESP=$(curl -sS --max-time 15 \
           -H "Authorization: Bearer ${ACCESS_TOKEN}" \
           "${SR_URL}/\$schemagroups")
-        if echo "$SR_RESP" | grep -q '"value"'; then
+        CURL_EXIT=$?
+        set -e
+        
+        if [ $CURL_EXIT -eq 0 ] && echo "$SR_RESP" | grep -q '"value"'; then
           echo "PASS: Schema Registry auth OK — groups listed"
         else
-          echo "FAIL: Schema Registry auth failed — response: $SR_RESP"
+          echo "FAIL: Schema Registry auth failed (exit $CURL_EXIT) — response: $SR_RESP"
           exit 1
         fi
 
