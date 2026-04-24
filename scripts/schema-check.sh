@@ -42,6 +42,10 @@ done
 
 BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || true)
 SR_URL=$(grep '^schema.registry.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || true)
+TOKEN_ENDPOINT=$(grep '^bearer.auth.issuer.endpoint.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || true)
+CLIENT_ID=$(grep '^bearer.auth.client.id=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || true)
+CLIENT_SECRET=$(grep '^bearer.auth.client.secret=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || true)
+SCOPE=$(grep '^bearer.auth.scope=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || true)
 TOPIC=$(grep '^topic=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n' || true)
 TOPIC="${TOPIC:-orders.placed}"
 
@@ -56,6 +60,26 @@ echo "==> bootstrap.servers=${BOOTSTRAP}"
 echo "==> schema.registry.url=${SR_URL}"
 echo "==> topic=${TOPIC}"
 echo "==> image=${IMAGE}"
+
+# -----------------------------------------------------------
+# Acquire SR Bearer token from bearer.auth.* properties in the file.
+# The Confluent SR client reads bearer.auth.* only from --property CLI flags,
+# not from --producer.config. We acquire the token here and pass it as
+# bearer.auth.token (STATIC_TOKEN) — a valid KafkaSerdes SR client property.
+# -----------------------------------------------------------
+echo ""
+echo "==> [0] Acquiring SR OAuth Bearer token ..."
+TOKEN_RESP=$(curl -sS --max-time 15 -X POST "$TOKEN_ENDPOINT" \
+  -d "grant_type=client_credentials" \
+  -d "client_id=${CLIENT_ID}" \
+  --data-urlencode "client_secret=${CLIENT_SECRET}" \
+  -d "scope=${SCOPE}")
+ACCESS_TOKEN=$(echo "$TOKEN_RESP" | sed -n 's/.*"access_token":[[:space:]]*"\([^"]*\)".*/\1/p' || true)
+if [ -z "$ACCESS_TOKEN" ]; then
+  echo "FAIL: Could not obtain SR OAuth token — response: $TOKEN_RESP"
+  exit 1
+fi
+echo "PASS: SR OAuth token acquired"
 
 # -----------------------------------------------------------
 # Step 1 — Avro produce
@@ -74,6 +98,8 @@ echo "$TEST_MESSAGE" | docker run --rm -i \
     --topic "$TOPIC" \
     --producer.config /tmp/client.properties \
     --property schema.registry.url="$SR_URL" \
+    --property bearer.auth.credentials.source=STATIC_TOKEN \
+    --property "bearer.auth.token=${ACCESS_TOKEN}" \
     --property value.schema="$SCHEMA_DEF"
 
 echo "PASS: Avro message produced to '${TOPIC}'"
@@ -91,6 +117,8 @@ CONSUMED=$(docker run --rm \
     --topic "$TOPIC" \
     --consumer.config /tmp/client.properties \
     --property schema.registry.url="$SR_URL" \
+    --property bearer.auth.credentials.source=STATIC_TOKEN \
+    --property "bearer.auth.token=${ACCESS_TOKEN}" \
     --group "$CONSUMER_GROUP" \
     --from-beginning \
     --max-messages 1 \
