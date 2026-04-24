@@ -99,6 +99,10 @@ resource "azurerm_key_vault_secret" "schema_client_properties" {
 resource "azuread_application" "apicurio" {
   display_name     = "app-apicurio-registry"
 
+  lifecycle {
+    ignore_changes = [identifier_uris]
+  }
+
   app_role {
     allowed_member_types = ["Application", "User"]
     description          = "Full administrative access to the registry."
