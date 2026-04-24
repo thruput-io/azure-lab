@@ -25,12 +25,12 @@
 
 #### Allowed vs. not allowed
 
-| ✅ Allowed | ❌ Not allowed |
-|---|---|
-| Read a key from `kafka-client.properties` or `schema-client.properties` with `grep` | Build a `sasl.jaas.config` string inline in a script |
-| Add a new key to `entra_app.tf` and re-deploy | Hardcode an endpoint, topic name, or credential in a workflow YAML |
-| Validate that a required key exists in the properties file | Overwrite or regenerate a properties file from within a test/script |
-| Pass the properties file directly to a tool via `-v`/`--config` | Merge two property sources (e.g., file + env var) inside a script |
+| ✅ Allowed                                                                           | ❌ Not allowed                                                       |
+|-------------------------------------------------------------------------------------|---------------------------------------------------------------------|
+| Read a key from `kafka-client.properties` or `schema-client.properties` with `grep` | Build a `sasl.jaas.config` string inline in a script                |
+| Add a new key to `entra_app.tf` and re-deploy                                       | Hardcode an endpoint, topic name, or credential in a workflow YAML  |
+| Validate that a required key exists in the properties file                          | Overwrite or regenerate a properties file from within a test/script |
+| Pass the properties file directly to a tool via `-v`/`--config`                     | Merge two property sources (e.g., file + env var) inside a script   |
 
 ---
 
@@ -42,16 +42,6 @@
 4. Does a new script parameter bypass the properties files for any Kafka or Schema Registry setting? → **Not allowed.**
 
 ---
-
-### Guideline: Refer to `Apicurio_schema_registry_plan.md` for Schema Registry Architecture
-
-The file `Apicurio_schema_registry_plan.md` (project root) is the authoritative plan for the Apicurio Schema Registry PoC deployment. It documents all architecture decisions, implementation steps, traffic flow, and the split between `kafka-client.properties` and `schema-client.properties`.
-
-**AI agents and contributors must read this file before:**
-- Modifying anything in `terraform/apicurio.tf`, `terraform/schema_registry.tf`, or the schema-related blocks in `terraform/entra_app.tf`.
-- Modifying `scripts/schema-check.sh` or `.github/workflows/schema-tests.yml`.
-- Changing App Gateway L7 (port 443) backend routing.
-- Adding or removing Key Vault secrets related to schema registry.
 
 **The plan must NOT be updated during implementation.** If an implementation decision deviates from the plan, record it in `deviations.md` instead. Only update the plan between implementation phases when a deliberate architectural change is agreed upon.
 
