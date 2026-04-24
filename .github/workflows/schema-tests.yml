@@ -82,11 +82,11 @@ jobs:
         # Helper to get prop
         get_prop() { grep "^${1}=" "$PROPS_FILE" | head -1 | cut -d= -f2-; }
 
-        TOKEN_ENDPOINT=$(get_prop "oauth.token.endpoint.url")
-        CLIENT_ID=$(get_prop "oauth.client.id")
-        CLIENT_SECRET=$(get_prop "oauth.client.secret")
+        TOKEN_ENDPOINT=$(get_prop "bearer.auth.issuer.endpoint.url")
+        CLIENT_ID=$(get_prop "bearer.auth.client.id")
+        CLIENT_SECRET=$(get_prop "bearer.auth.client.secret")
         BOOTSTRAP=$(get_prop "bootstrap.servers")
-        SCOPE=$(get_prop "oauth.scope")
+        SCOPE=$(get_prop "bearer.auth.scope")
         if [ -z "$SCOPE" ]; then SCOPE="https://eventhubs.azure.net/.default"; fi
 
         echo "==> [2a] Fetching OAuth token ..."
