@@ -84,7 +84,8 @@ resource "azurerm_application_gateway" "network" {
     interval                                  = 30
     timeout                                   = 30
     unhealthy_threshold                       = 3
-    pick_host_name_from_backend_http_settings = true
+    pick_host_name_from_backend_http_settings = false
+    host                                      = azurerm_container_group.apicurio.fqdn
     match {
       status_code = ["200-401"]
     }
