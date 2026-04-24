@@ -1,16 +1,14 @@
-# Azure Event Hub behind Application Gateway (POC)
+# Azure Event Hub + Apicurio Schema Registry behind Application Gateway (PoC)
 
-This Proof of Concept (POC) exposes **Azure Event Hubs** through an **Azure Application Gateway** while keeping the Event Hubs namespace private through Private Link.
+This Proof of Concept exposes **Azure Event Hubs** (Kafka endpoint) and **Apicurio Schema Registry** (Confluent-compatible API) through an **Azure Application Gateway**, keeping the Event Hubs namespace private via Private Link.
 
-## Features
+The goal is to validate a configuration that external clients — starting with **Pega Cloud** — can use with standard Confluent Kafka client libraries and Avro schema support.
 
-- **Private Event Hubs namespace** in a VNet using Private Endpoint + Private DNS.
-- **Application Gateway endpoints**:
-  - `:443` HTTPS route to Event Hubs HTTPS endpoint.
-  - `:5671` TLS proxy for AMQP clients.
-  - `:9093` TLS proxy for Kafka clients.
-- **Custom domain + Key Vault certificate** managed by Application Gateway.
-- **Entra ID OAuth2** for Kafka clients (`SASL/OAUTHBEARER`).
+See [`goals.md`](goals.md) for full objectives and phase definitions.  
+See [`PegaSetup.md`](PegaSetup.md) for the Pega integration guide.  
+See [`poc-outcome.md`](poc-outcome.md) for the full PoC outcome and findings.
+
+---
 
 ## Architecture
 
@@ -19,7 +17,7 @@ Internet
    │
    ▼
 Application Gateway v2 (public IP, custom domain)
-   ├── :443  (L7 HTTPS)  → Event Hubs HTTPS endpoint
+   ├── :443  (L7 HTTPS)  → Apicurio Schema Registry (ACI)
    ├── :5671 (L4 TLS)    → Event Hubs AMQP
    └── :9093 (L4 TLS)    → Event Hubs Kafka
                                 │
@@ -29,8 +27,26 @@ Application Gateway v2 (public IP, custom domain)
                          (Standard SKU, VNet isolated)
 ```
 
-Authentication: **SASL/OAUTHBEARER** (Kafka)  
-Token issuer: `https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/token`
+**Kafka broker auth:** `SASL/PLAIN` with `$ConnectionString`  
+**Schema Registry auth:** Entra ID OAuth2 (`bearer.auth.*` client credentials flow)  
+**Schema Registry API:** Confluent-compatible (`/apis/ccompat/v7`)
+
+> **Platform constraint:** Azure Event Hubs port 9093 supports **only SASL/PLAIN with `$ConnectionString`** for Kafka clients. `SASL/OAUTHBEARER` is not supported on the Kafka endpoint (tested and confirmed, see `deviations.md` DEV-001).
+
+---
+
+## Features
+
+- **Private Event Hubs namespace** in a VNet using Private Endpoint + Private DNS.
+- **Application Gateway endpoints:**
+  - `:9093` TLS proxy for Kafka clients (SASL/PLAIN)
+  - `:443` HTTPS route to Apicurio Schema Registry
+  - `:5671` TLS proxy for AMQP clients
+- **Apicurio Schema Registry** on Azure Container Instances, secured with Entra ID OIDC.
+- **Custom domain + Key Vault certificate** managed by Application Gateway.
+- **Two self-contained client properties files** delivered via GitHub Actions artifact.
+
+---
 
 ## Prerequisites
 
@@ -38,11 +54,13 @@ Token issuer: `https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/token`
 - A PFX certificate for your custom domain.
 - A custom domain name pointing to Application Gateway public IP/FQDN.
 
+---
+
 ## Deployment
 
 ### GitHub Actions
 
-This project includes an automated Terraform deployment workflow.
+Automated Terraform deployment via the **Terraform Deploy** workflow.
 
 #### CI/CD prerequisites
 
@@ -54,79 +72,81 @@ This project includes an automated Terraform deployment workflow.
    - `PFX_BASE64`
    - `PFX_PASSWORD`
 3. Add repository variable:
-   - `CUSTOM_DOMAIN_NAME` (for example `eventhub.example.com`).
+   - `CUSTOM_DOMAIN_NAME` (e.g. `eventhub.example.com`)
+
+After a successful deploy, the **Terraform Deploy** workflow also updates the `KAFKA_CLIENT_PROPERTIES` and `SCHEMA_CLIENT_PROPERTIES` GitHub secrets from Key Vault.
 
 ---
 
-## Entra ID App Registration & RBAC
+## Client Properties Files
 
-Terraform (`terraform/entra_app.tf`) provisions an app registration for Kafka clients.
+After `terraform apply`, two self-contained properties files are stored in Key Vault and available via **Actions → Download client.properties → Run workflow**:
 
-| Resource | Purpose |
+| File | Key Vault secret | Purpose |
+|---|---|---|
+| `kafka-client.properties` | `kafka-client-properties` | Kafka broker only (SASL/PLAIN) — JSON/text clients |
+| `schema-client.properties` | `schema-client-properties` | Kafka broker + Schema Registry + OAuth — Avro clients |
+
+> **These files are Terraform outputs — never local files in this repository.**  
+> If a key is missing or wrong, fix `terraform/entra_app.tf` and redeploy.  
+> See [`.ai/project_guidelines.md`](.ai/project_guidelines.md) for the full rule and background.
+
+---
+
+## Entra ID App Registrations
+
+Terraform (`terraform/entra_app.tf`) provisions two app registrations:
+
+| App | Purpose |
 |---|---|
-| `azuread_application` | App registration (`app-eventhub-kafka-client`) |
-| `azuread_service_principal` | Service principal for the app |
-| `azuread_application_password` | Client secret used by Kafka clients |
-| RBAC: `Azure Event Hubs Data Sender` | Produce permission |
-| RBAC: `Azure Event Hubs Data Receiver` | Consume permission |
+| `app-eventhub-kafka-client` | Kafka client identity — RBAC for Event Hubs produce/consume + SR admin role |
+| `app-apicurio-registry` | Apicurio resource server — defines `sr-admin` / `sr-readonly` app roles |
 
-Kafka clients request tokens from:
-
-```
-https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/token
-```
-
-with scope `https://eventhubs.azure.net/.default`.
-
----
-
-## Kafka Client Credentials (stored in Key Vault)
-
-After `terraform apply`, the following secrets are written to Key Vault:
-
-| Secret Name | Description |
-|---|---|
-| `kafka-client-secret` | App registration client secret |
-| `kafka-client-properties` | Rendered Kafka `client.properties` |
-
-Download the rendered `client.properties` via the **Download client.properties** workflow artifact.
-
-> ⚠️ Never commit populated credentials to source control.
-
----
-
-## Client Configuration (`client.properties`)
-
-`client.properties` contains Kafka bootstrap and OAuth settings for Event Hubs Kafka access through Application Gateway (`:9093`).
-
-Template file: `kafka/client.properties`
+The `schema-client.properties` file contains the `kafka-client` credentials and the Apicurio OAuth scope — it is self-contained for Avro clients.
 
 ---
 
 ## Post-Deploy Validation
 
-- Confirm DNS for `CUSTOM_DOMAIN_NAME` points to Application Gateway.
-- Confirm TCP reachability to Kafka endpoint `CUSTOM_DOMAIN_NAME:9093`.
-- Run your producer/consumer smoke tests with the downloaded `client.properties`.
+Run the smoke tests via GitHub Actions:
+
+- **Schema Tests** (`schema-tests.yml`) — Avro produce + consume round-trip against Apicurio:
+  - Check 1: Connectivity + SSL
+  - Check 2: Authentication (OAuth + Kafka)
+  - Check 3: Avro Produce + Consume
+
+Or run locally (requires a runtime `schema-client.properties` from the artifact):
+
+```bash
+./scripts/schema-check.sh --props-file /path/to/schema-client.properties
+./scripts/kafka-check.sh  --props-file /path/to/kafka-client.properties
+```
 
 ---
 
-## Key Infrastructure Components
+## Key Infrastructure Files
 
 | File | Purpose |
 |---|---|
 | `terraform/main.tf` | VNet, subnets, resource group |
 | `terraform/eventhub.tf` | Event Hubs namespace, private endpoint, private DNS |
-| `terraform/appgateway.tf` | Application Gateway listeners/rules/backends |
-| `terraform/keyvault.tf` | Key Vault, certificate, managed identity, secrets |
+| `terraform/appgateway.tf` | Application Gateway listeners, rules, backends |
+| `terraform/keyvault.tf` | Key Vault, certificate, managed identity |
+| `terraform/entra_app.tf` | App registrations, RBAC, rendered client properties (source of truth) |
+| `terraform/apicurio.tf` | Apicurio Schema Registry on ACI |
+| `terraform/schema_registry.tf` | Event Hub topics |
 | `terraform/providers.tf` | Provider versions and backend config |
 | `terraform/variables.tf` | Input variables |
-| `terraform/entra_app.tf` | App registration, RBAC, rendered client properties |
-| `terraform/schema_registry.tf` | Event Hub topic and schema group resources |
-| `kafka/client.properties` | Kafka client config template |
+| `scripts/kafka-check.sh` | Kafka connectivity + produce/consume smoke test |
+| `scripts/schema-check.sh` | Avro produce + consume smoke test (schema pre-registration + native SR OAuth) |
+| `.github/workflows/schema-tests.yml` | CI schema validation workflow |
+| `.github/workflows/download-client-properties.yml` | Deliver client properties as artifact |
+
+---
 
 ## Important Notes
 
-- **L4 proxying** requires clients that support SNI for `custom_domain_name`.
+- **L4 proxying** requires clients that support SNI for `CUSTOM_DOMAIN_NAME`.
 - **DNS** must be configured after deployment for the custom domain.
 - **TLS certificate** is served by Application Gateway from Key Vault.
+- **SASL/OAUTHBEARER** is not supported on the Azure Event Hubs Kafka endpoint — use SASL/PLAIN with `$ConnectionString` (see `deviations.md` DEV-001).
