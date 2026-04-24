@@ -9,6 +9,13 @@
     
 ## PHASE 1, current for building internal knowledge
 
+## Known platform constraint: Azure Event Hubs Kafka auth
+
+Azure Event Hubs port 9093 supports **only SASL/PLAIN with `$ConnectionString`** for Kafka clients.
+SASL/OAUTHBEARER is not supported on the Kafka endpoint (tested 2026-04-24, see `deviations.md` DEV-001).
+OAuth is only available via AMQP (port 5671), which Confluent KafkaSerdes does not use.
+This is not a workaround — it is the documented Azure Event Hubs + Confluent integration pattern.
+
 ## Constraint: Confluent KafkaSerdes compatibility is the gate
     -   There is no value in setting up, testing, or documenting any schema registry feature, authentication flow, or client configuration that is not supported by **Confluent KafkaSerdes with schema support** (i.e. `kafka-avro-serializer`, `kafka-avro-deserializer` and the Confluent Schema Registry client).
     -   If a feature or workaround cannot be expressed as standard properties consumed by those serdes, it must not be pursued. Fix the infrastructure instead.

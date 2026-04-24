@@ -1,7 +1,7 @@
 # Kafka SASL/OAUTHBEARER Migration Plan
 
 > **Save location: project root (`kafka-oauthbearer-migration.md`)**
-> **Status: Active — do not modify during implementation. Record deviations in `deviations.md`.**
+> **Status: CLOSED — Azure Event Hubs does not support SASL/OAUTHBEARER on the Kafka endpoint. See findings below.**
 
 ---
 
@@ -95,7 +95,28 @@ The `bearer.auth.*` Schema Registry section is unchanged.
 
 ---
 
-## Implementation Steps
+## ⛔ Findings — Plan Closed
+
+Step 1 (local Docker test) was completed on 2026-04-24. Result: **SASL/OAUTHBEARER is not supported by Azure Event Hubs on port 9093.**
+
+The broker accepts the TCP/TLS connection but rejects the OAUTHBEARER SASL exchange at the protocol level:
+```
+java.lang.RuntimeException: non-nullable field authBytes was serialized as null
+    at SaslAuthenticateResponseData.read(...)
+```
+This means the broker returns a malformed/empty auth response because it does not implement the OAUTHBEARER SASL mechanism on the Kafka endpoint.
+
+Azure Event Hubs Kafka endpoint (port 9093) supports **only SASL/PLAIN with `$ConnectionString`**. OAuth is only available via AMQP (port 5671) — a different protocol that Confluent KafkaSerdes does not use.
+
+The original `confluent-endpoint-check.yml` (commit `1561196`) that used OAUTHBEARER was written with the right intent but was never actually working at the broker auth level.
+
+**Consequence:** The current SASL/PLAIN + `$ConnectionString` approach is not a shortcut or a workaround — it is the **only supported Kafka auth mechanism for Azure Event Hubs**. It must remain in both `kafka-client.properties` and `schema-client.properties`.
+
+This plan is closed. No Terraform changes are needed.
+
+---
+
+## Original Implementation Steps (for reference)
 
 ### Step 1 — Verify OAUTHBEARER works via local Docker test
 
