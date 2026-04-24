@@ -27,7 +27,6 @@ resource "azurerm_container_group" "apicurio" {
       QUARKUS_OIDC_TENANT_ENABLED    = "true"
       QUARKUS_OIDC_AUTH_SERVER_URL = "https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/v2.0"
       QUARKUS_OIDC_CLIENT_ID       = azuread_application.apicurio.client_id
-      REGISTRY_AUTH_TOKEN_TYPE     = "id"
       APICURIO_AUTH_ROLE_BASED_AUTHORIZATION = "true"
       APICURIO_AUTH_ROLE_SOURCE              = "token"
       APICURIO_AUTH_ROLES_PATH               = "roles"
