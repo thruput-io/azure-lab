@@ -155,6 +155,16 @@ The "Download client.properties" GitHub Action delivers **both** files as separa
 
 ---
 
+## Constraint: Confluent KafkaSerdes compatibility is the gate
+
+> There is no value in setting up, testing, or documenting any schema registry feature, authentication flow, or client configuration that is **not supported by Confluent KafkaSerdes with schema support** (`kafka-avro-serializer` / `kafka-avro-deserializer` and the Confluent Schema Registry client).
+>
+> - If a workaround cannot be expressed as standard properties consumed by those serdes → it must not be pursued. Fix the infrastructure instead.
+> - If a property or auth flow works in `schema-check.sh` but is not a valid KafkaSerdes property → it has no value for Pega or any real client. Remove it.
+> - The test in `schema-check.sh` is only meaningful if it uses the same property set that a real Confluent Avro client would use.
+
+---
+
 ## Process Rules
 
 - **Do not update this file during implementation.** It is the frozen baseline.
