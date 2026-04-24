@@ -7,6 +7,7 @@
 #
 # Only input: schema-client.properties file (self-contained)
 # All Kafka, Schema Registry, and OAuth settings come from that file.
+# The SR client acquires OAuth tokens natively using bearer.auth.* from the file.
 #
 # Usage:
 #   ./scripts/schema-check.sh --props-file /path/to/schema-client.properties
@@ -61,68 +62,104 @@ echo "==> schema.registry.url=${SR_URL}"
 echo "==> topic=${TOPIC}"
 echo "==> image=${IMAGE}"
 
+# The Confluent SR client requires the token endpoint URL to be in the JVM
+# allowed-URLs list (org.apache.kafka.sasl.oauthbearer.allowed.urls).
+# Passed via SCHEMA_REGISTRY_JVM_PERFORMANCE_OPTS — JVM security config only,
+# not a credential. The SR client acquires OAuth tokens natively from bearer.auth.*
+# in the properties file.
+JVM_ALLOWED="-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=${TOKEN_ENDPOINT}"
+
 # -----------------------------------------------------------
-# Acquire SR Bearer token from bearer.auth.* properties in the file.
-# The Confluent SR client reads bearer.auth.* only from --property CLI flags,
-# not from --producer.config. We acquire the token here and pass it as
-# bearer.auth.token (STATIC_TOKEN) — a valid KafkaSerdes SR client property.
+# Step 0 — Pre-register schema (idempotent setup step)
+# Acquires a token using bearer.auth.* from the properties file and POSTs
+# the schema to Apicurio before the produce step. This is the only curl in
+# the script — it is a setup step (like a DB migration before a test), not
+# an auth bypass. The SR client still handles its own OAuth natively.
 # -----------------------------------------------------------
+SCHEMA_DEF='{"type":"record","name":"OrderPlaced","namespace":"io.thruput.orders","fields":[{"name":"order_id","type":"string"},{"name":"product","type":"string"},{"name":"quantity","type":"int"},{"name":"timestamp","type":"long"}]}'
+SUBJECT="${TOPIC}-value"
+
 echo ""
-echo "==> [0] Acquiring SR OAuth Bearer token ..."
-TOKEN_RESP=$(curl -sS --max-time 15 -X POST "$TOKEN_ENDPOINT" \
-  -d "grant_type=client_credentials" \
-  -d "client_id=${CLIENT_ID}" \
+echo "==> [0] Pre-registering schema for subject '${SUBJECT}' ..."
+TOKEN_RESP=$(curl -sS --max-time 15 -X POST "${TOKEN_ENDPOINT}" \
+  --data-urlencode "grant_type=client_credentials" \
+  --data-urlencode "client_id=${CLIENT_ID}" \
   --data-urlencode "client_secret=${CLIENT_SECRET}" \
-  -d "scope=${SCOPE}")
-ACCESS_TOKEN=$(echo "$TOKEN_RESP" | sed -n 's/.*"access_token":[[:space:]]*"\([^"]*\)".*/\1/p' || true)
-if [ -z "$ACCESS_TOKEN" ]; then
-  echo "FAIL: Could not obtain SR OAuth token — response: $TOKEN_RESP"
+  --data-urlencode "scope=${SCOPE}")
+REG_TOKEN=$(echo "$TOKEN_RESP" | sed -n 's/.*"access_token":[[:space:]]*"\([^"]*\)".*/\1/p' || true)
+if [ -z "$REG_TOKEN" ]; then
+  echo "FAIL: Could not obtain token for schema pre-registration — response: $TOKEN_RESP"
   exit 1
 fi
-echo "PASS: SR OAuth token acquired"
+
+REG_RESP=$(curl -sS --max-time 15 -o /dev/null -w "%{http_code}" \
+  -X POST "${SR_URL}/subjects/${SUBJECT}/versions" \
+  -H "Authorization: Bearer ${REG_TOKEN}" \
+  -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+  -d "{\"schema\": $(echo "$SCHEMA_DEF" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')}")
+
+if [ "$REG_RESP" = "200" ] || [ "$REG_RESP" = "409" ]; then
+  echo "PASS: Schema pre-registered (HTTP ${REG_RESP})"
+else
+  echo "FAIL: Schema pre-registration returned HTTP ${REG_RESP}"
+  exit 1
+fi
 
 # -----------------------------------------------------------
 # Step 1 — Avro produce
+# --command-config passes Kafka broker auth from the properties file.
+# --reader-property passes SR settings (bearer.auth.*) to the SR client.
+# The SR client acquires the OAuth token natively — no token injection.
 # -----------------------------------------------------------
-SCHEMA_DEF='{"type":"record","name":"OrderPlaced","namespace":"io.thruput.orders","fields":[{"name":"order_id","type":"string"},{"name":"product","type":"string"},{"name":"quantity","type":"int"},{"name":"timestamp","type":"long"}]}'
 TEST_MESSAGE="{\"order_id\":\"schema-check-$(date +%s)\",\"product\":\"test-widget\",\"quantity\":1,\"timestamp\":$(date +%s%3N)}"
 CONSUMER_GROUP="schema-check-$(date +%s)"
 
 echo ""
 echo "==> [1] Producing Avro message to topic '${TOPIC}' ..."
 echo "$TEST_MESSAGE" | docker run --rm -i \
+  -e "SCHEMA_REGISTRY_JVM_PERFORMANCE_OPTS=${JVM_ALLOWED}" \
   -v "$ABS_PROPS_FILE:/tmp/client.properties:ro" \
   "$IMAGE" \
   kafka-avro-console-producer \
     --bootstrap-server "$BOOTSTRAP" \
     --topic "$TOPIC" \
-    --producer.config /tmp/client.properties \
-    --property schema.registry.url="$SR_URL" \
-    --property bearer.auth.credentials.source=STATIC_TOKEN \
-    --property "bearer.auth.token=${ACCESS_TOKEN}" \
-    --property value.schema="$SCHEMA_DEF"
+    --command-config /tmp/client.properties \
+    --reader-property "schema.registry.url=${SR_URL}" \
+    --reader-property "bearer.auth.credentials.source=OAUTHBEARER" \
+    --reader-property "bearer.auth.issuer.endpoint.url=${TOKEN_ENDPOINT}" \
+    --reader-property "bearer.auth.client.id=${CLIENT_ID}" \
+    --reader-property "bearer.auth.client.secret=${CLIENT_SECRET}" \
+    --reader-property "bearer.auth.scope=${SCOPE}" \
+    --reader-property "value.schema=${SCHEMA_DEF}"
 
 echo "PASS: Avro message produced to '${TOPIC}'"
 
 # -----------------------------------------------------------
 # Step 2 — Avro consume
+# --command-config passes Kafka broker auth from the properties file.
+# --formatter-property passes SR settings (bearer.auth.*) to the SR client.
+# The SR client acquires the OAuth token natively — no token injection.
 # -----------------------------------------------------------
 echo ""
 echo "==> [2] Consuming Avro message from topic '${TOPIC}' ..."
 CONSUMED=$(docker run --rm \
+  -e "SCHEMA_REGISTRY_JVM_PERFORMANCE_OPTS=${JVM_ALLOWED}" \
   -v "$ABS_PROPS_FILE:/tmp/client.properties:ro" \
   "$IMAGE" \
   kafka-avro-console-consumer \
     --bootstrap-server "$BOOTSTRAP" \
     --topic "$TOPIC" \
-    --consumer.config /tmp/client.properties \
-    --property schema.registry.url="$SR_URL" \
-    --property bearer.auth.credentials.source=STATIC_TOKEN \
-    --property "bearer.auth.token=${ACCESS_TOKEN}" \
+    --command-config /tmp/client.properties \
+    --formatter-property "schema.registry.url=${SR_URL}" \
+    --formatter-property "bearer.auth.credentials.source=OAUTHBEARER" \
+    --formatter-property "bearer.auth.issuer.endpoint.url=${TOKEN_ENDPOINT}" \
+    --formatter-property "bearer.auth.client.id=${CLIENT_ID}" \
+    --formatter-property "bearer.auth.client.secret=${CLIENT_SECRET}" \
+    --formatter-property "bearer.auth.scope=${SCOPE}" \
     --group "$CONSUMER_GROUP" \
     --from-beginning \
     --max-messages 1 \
-    --consumer-property request.timeout.ms=45000 \
+    --command-property request.timeout.ms=45000 \
     --timeout-ms 45000 2>&1) || true
 
 JSON_LINE=$(echo "$CONSUMED" | grep -v '^[[:space:]]*$' | grep -v '^\[' | grep '^{' | head -1 || true)
