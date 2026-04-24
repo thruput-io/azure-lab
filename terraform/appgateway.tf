@@ -74,6 +74,20 @@ resource "azurerm_application_gateway" "network" {
     protocol                            = "Http"
     request_timeout                     = 60
     pick_host_name_from_backend_address = false
+    probe_name                          = "apicurio-probe"
+  }
+
+  probe {
+    name                                      = "apicurio-probe"
+    protocol                                  = "Http"
+    path                                      = "/apis/ccompat/v7/subjects"
+    interval                                  = 30
+    timeout                                   = 30
+    unhealthy_threshold                       = 3
+    pick_host_name_from_backend_http_settings = true
+    match {
+      status_code = ["200-401"]
+    }
   }
 
   # L4 Backend (TCP/TLS Proxy)
