@@ -63,7 +63,7 @@ resource "azurerm_application_gateway" "network" {
 
   backend_address_pool {
     name         = "apicurio-beap"
-    ip_addresses = [azurerm_container_group.apicurio.ip_address]
+    fqdns = [azurerm_container_group.apicurio.fqdn]
   }
 
   # L7 Settings (HTTP to Apicurio ACI :8080)
