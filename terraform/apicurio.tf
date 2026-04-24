@@ -25,7 +25,6 @@ resource "azurerm_container_group" "apicurio" {
 
     environment_variables = {
       QUARKUS_OIDC_TENANT_ENABLED = "false"
-      APICURIO_STORAGE_KIND = "mem"
 
 
     }
