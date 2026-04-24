@@ -41,7 +41,7 @@ fi
 # Parse properties for local use (curl)
 # -----------------------------------------------------------
 get_prop() {
-  grep "^${1}=" "$PROPS_FILE" | head -1 | cut -d= -f2-
+  grep "^${1}=" "$PROPS_FILE" | head -1 | cut -d= -f2- || true
 }
 
 BOOTSTRAP=$(get_prop "bootstrap.servers")
