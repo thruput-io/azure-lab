@@ -88,7 +88,7 @@ resource "azurerm_key_vault_secret" "schema_client_properties" {
     "oauth.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
     "oauth.client.id=${azuread_application.kafka_client.client_id}",
     "oauth.client.secret=${azuread_application_password.kafka_client_secret.value}",
-    "oauth.scope=api://${azuread_application.apicurio.client_id}/.default",
+    "oauth.scope=${azuread_application.apicurio.client_id}/.default",
   ])
 
   depends_on = [azurerm_role_assignment.deployer_kv_secrets_officer]
