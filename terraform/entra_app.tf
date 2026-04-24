@@ -83,12 +83,13 @@ resource "azurerm_key_vault_secret" "schema_client_properties" {
     "schema.registry.url=https://${var.custom_domain_name}/apis/ccompat/v7",
     "",
     "# ============================================================",
-    "# OAuth credentials (Entra ID — used by client for SR auth)",
+    "# Schema Registry OAuth (Confluent SR client bearer.auth.* properties)",
+    "# bearer.auth.credentials.source defaults to OAUTHBEARER — no need to set it",
     "# ============================================================",
-    "oauth.token.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
-    "oauth.client.id=${azuread_application.kafka_client.client_id}",
-    "oauth.client.secret=${azuread_application_password.kafka_client_secret.value}",
-    "oauth.scope=api://${azuread_application.apicurio.client_id}/.default",
+    "bearer.auth.issuer.endpoint.url=https://login.microsoftonline.com/${data.azurerm_client_config.current.tenant_id}/oauth2/v2.0/token",
+    "bearer.auth.client.id=${azuread_application.kafka_client.client_id}",
+    "bearer.auth.client.secret=${azuread_application_password.kafka_client_secret.value}",
+    "bearer.auth.scope=api://${azuread_application.apicurio.client_id}/.default",
   ])
 
   depends_on = [azurerm_role_assignment.deployer_kv_secrets_officer]
