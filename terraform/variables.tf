@@ -26,3 +26,23 @@ variable "pfx_password" {
   type        = string
   sensitive   = true
 }
+
+variable "keyvault_name" {
+  description = "Name of the Key Vault."
+  type        = string
+}
+
+variable "eventhub_namespace_name" {
+  description = "Name of the Event Hub namespace."
+  type        = string
+}
+
+variable "topics" {
+  description = "Map of Event Hub topics to create."
+  type = map(object({
+    name              = string
+    partition_count   = number
+    message_retention = number
+  }))
+  default = {}
+}

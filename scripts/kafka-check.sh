@@ -41,22 +41,25 @@ if [[ ! -s "$PROPS_FILE" ]]; then
   echo "ERROR: client.properties not found or empty: $PROPS_FILE"; exit 1
 fi
 
-for key in bootstrap.servers checks_topic security.protocol sasl.mechanism sasl.jaas.config; do
+for key in bootstrap.servers security.protocol sasl.mechanism sasl.jaas.config schema.registry.url; do
   if ! grep -q "^${key}=" "$PROPS_FILE"; then
     echo "ERROR: client.properties missing required key: ${key}"; exit 1
   fi
 done
 
 BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
-TOPIC=$(grep     '^checks_topic='      "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+SR_URL=$(grep    '^schema.registry.url=' "$PROPS_FILE" | cut -d= -f2- | tr -d ' \r\n')
+TOPIC="internal.test.test-event.event.v1"
 
 echo "==> bootstrap.servers=${BOOTSTRAP}"
-echo "==> checks_topic=${TOPIC}"
+echo "==> checks_topic=${TOPIC} (well-known)"
+echo "==> schema.registry.url=${SR_URL}"
 echo "==> image=${IMAGE}"
 
 # Unique consumer group per run
 GROUP="kafka-check-$(date -u +%Y%m%dT%H%M%S)-$$"
 MSG='{"check":"kafka-check","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'
+SCHEMA='{"type":"object","properties":{"check":{"type":"string"},"ts":{"type":"string"}},"required":["check","ts"]}'
 
 echo "==> consumer.group=${GROUP}"
 
@@ -79,25 +82,26 @@ echo "PASS: Kafka auth OK (topic list succeeded)"
 # Check 3 — Produce a message
 # -----------------------------------------------------------------------
 echo ""
-echo "==> [3] Producing message to '${TOPIC}' ..."
+echo "==> [3] Producing JSON Schema message to '${TOPIC}' ..."
 echo "$MSG" | docker run -i --rm \
   -v "${PROPS_FILE}:/tmp/client.properties:ro" \
   "$IMAGE" \
-  kafka-console-producer \
+  kafka-json-schema-console-producer \
     --bootstrap-server "$BOOTSTRAP" \
     --topic "$TOPIC" \
-    --producer.config /tmp/client.properties
+    --producer.config /tmp/client.properties \
+    --property value.schema="$SCHEMA"
 echo "PASS: Message produced to '${TOPIC}'"
 
 # -----------------------------------------------------------------------
 # Check 4 — Consume 1 message
 # -----------------------------------------------------------------------
 echo ""
-echo "==> [4] Consuming message from '${TOPIC}' (group='${GROUP}', timeout 45s) ..."
+echo "==> [4] Consuming JSON Schema message from '${TOPIC}' (group='${GROUP}', timeout 45s) ..."
 CONSUMED=$(docker run --rm \
   -v "${PROPS_FILE}:/tmp/client.properties:ro" \
   "$IMAGE" \
-  kafka-console-consumer \
+  kafka-json-schema-console-consumer \
     --bootstrap-server "$BOOTSTRAP" \
     --topic "$TOPIC" \
     --consumer.config /tmp/client.properties \

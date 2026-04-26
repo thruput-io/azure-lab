@@ -1,24 +1,22 @@
 resource "azurerm_public_ip" "appgw_pip" {
-  name                = "pip-appgw-lab"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
+  name                = "pip-${var.name}"
+  location            = var.location
+  resource_group_name = var.resource_group_name
   allocation_method   = "Static"
   sku                 = "Standard"
-  domain_name_label   = "thruput-gw-lab"
+  domain_name_label   = var.public_ip_domain_label
 }
 
 locals {
-  backend_address_pool_name      = "${azurerm_virtual_network.vnet.name}-beap"
-  frontend_ip_configuration_name = "${azurerm_virtual_network.vnet.name}-feip"
-  http_setting_name              = "${azurerm_virtual_network.vnet.name}-be-htst"
-  listener_name                  = "${azurerm_virtual_network.vnet.name}-httplstn"
-  request_routing_rule_name      = "${azurerm_virtual_network.vnet.name}-rqrt"
+  frontend_ip_configuration_name = "${var.name}-feip"
+  listener_name                  = "${var.name}-httplstn"
+  request_routing_rule_name      = "${var.name}-rqrt"
 }
 
-resource "azurerm_application_gateway" "network" {
-  name                = "appgw-eventhub-lab"
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
+resource "azurerm_application_gateway" "this" {
+  name                = var.name
+  resource_group_name = var.resource_group_name
+  location            = var.location
 
   sku {
     name     = "Standard_v2"
@@ -28,12 +26,12 @@ resource "azurerm_application_gateway" "network" {
 
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.appgw_id.id]
+    identity_ids = [var.identity_id]
   }
 
   gateway_ip_configuration {
-    name      = "my-gateway-ip-configuration"
-    subnet_id = azurerm_subnet.appgw_subnet.id
+    name      = "gateway-ip-configuration"
+    subnet_id = var.appgw_subnet_id
   }
 
   frontend_port {
@@ -58,12 +56,12 @@ resource "azurerm_application_gateway" "network" {
 
   backend_address_pool {
     name  = "evh-beap"
-    fqdns = [format("%s.servicebus.windows.net", azurerm_eventhub_namespace.evh.name)]
+    fqdns = [var.eventhub_namespace_fqdn]
   }
 
   backend_address_pool {
-    name         = "apicurio-beap"
-    fqdns = [azurerm_container_group.apicurio.fqdn]
+    name  = "apicurio-beap"
+    fqdns = [var.apicurio_fqdn]
   }
 
   # L7 Settings (HTTP to Apicurio ACI :8080)
@@ -85,7 +83,7 @@ resource "azurerm_application_gateway" "network" {
     timeout                                   = 30
     unhealthy_threshold                       = 3
     pick_host_name_from_backend_http_settings = false
-    host                                      = azurerm_container_group.apicurio.fqdn
+    host                                      = var.apicurio_fqdn
     match {
       status_code = ["200-401"]
     }
@@ -97,7 +95,7 @@ resource "azurerm_application_gateway" "network" {
     port               = 5671
     protocol           = "Tls"
     timeout_in_seconds = 60
-    host_name          = format("%s.servicebus.windows.net", azurerm_eventhub_namespace.evh.name)
+    host_name          = var.eventhub_namespace_fqdn
   }
 
   backend {
@@ -105,15 +103,15 @@ resource "azurerm_application_gateway" "network" {
     port               = 9093
     protocol           = "Tls"
     timeout_in_seconds = 60
-    host_name          = format("%s.servicebus.windows.net", azurerm_eventhub_namespace.evh.name)
+    host_name          = var.eventhub_namespace_fqdn
   }
 
   ssl_certificate {
     name                = "managed-cert"
-    key_vault_secret_id = azurerm_key_vault_certificate.custom_cert.secret_id
+    key_vault_secret_id = var.kv_cert_secret_id
   }
 
-  # L7 Listener (HTTPS)
+  # L7 Listener (HTTPS :443)
   http_listener {
     name                           = local.listener_name
     frontend_ip_configuration_name = local.frontend_ip_configuration_name
@@ -123,7 +121,7 @@ resource "azurerm_application_gateway" "network" {
     host_name                      = var.custom_domain_name
   }
 
-  # L4 Listener (TCP/TLS)
+  # L4 Listeners (TCP/TLS)
   listener {
     name                           = "amqp-listener"
     frontend_ip_configuration_name = local.frontend_ip_configuration_name
@@ -152,7 +150,7 @@ resource "azurerm_application_gateway" "network" {
     backend_http_settings_name = "apicurio-be-htst"
   }
 
-  # L4 Rule
+  # L4 Rules
   routing_rule {
     name                      = "amqp-rule"
     priority                  = 110
@@ -168,9 +166,4 @@ resource "azurerm_application_gateway" "network" {
     backend_address_pool_name = "evh-beap"
     backend_name              = "kafka-be-settings"
   }
-
-  depends_on = [
-    azurerm_role_assignment.appgw_kv_reader,
-    azurerm_key_vault_certificate.custom_cert
-  ]
 }

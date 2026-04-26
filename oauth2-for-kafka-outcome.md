@@ -101,6 +101,22 @@ and registers/looks it up in Apicurio automatically — no inline schema needed.
 
 ## Key findings and decisions
 
+### 0. It´s working
+
+confluent kafka topic consume orders -v --bootstrap eventhub.grayskull.se:9093 --config-file oauth.json
+
+{
+"bootstrap.servers": "eventhub.grayskull.se:9093",
+"security.protocol": "SASL_SSL",
+"sasl.mechanism": "OAUTHBEARER",
+"sasl.oauthbearer.method": "oidc",
+"sasl.oauthbearer.client.id": "c9903fe3-a886-4e0e-b59f-bf52242facb3",
+"sasl.oauthbearer.client.secret": "***",
+"sasl.oauthbearer.scope": "https://evh-lab-8ae187ea.servicebus.windows.net/.default",
+"sasl.oauthbearer.token.endpoint.url": "https://login.microsoftonline.com/58fb8d8c-f4d6-4d0c-b5c9-ad868b6e975e/oauth2/v2.0/token"
+}
+
+
 ### 1. Azure Event Hubs Kafka auth: SASL/PLAIN only (DEV-001)
 
 **Finding:** Azure Event Hubs port 9093 supports **only SASL/PLAIN with `$ConnectionString`**
