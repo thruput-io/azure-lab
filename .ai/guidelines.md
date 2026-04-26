@@ -1,1 +1,1 @@
-Read .ai/project_guidelines.md and Apicurio_schema_registry_plan.md
+Read .ai/project_guidelines.md

@@ -18,10 +18,10 @@ resource "azurerm_subnet" "appgw_subnet" {
 }
 
 resource "azurerm_subnet" "pe_subnet" {
-  name                                           = "snet-pe"
-  resource_group_name                            = azurerm_resource_group.rg.name
-  virtual_network_name                           = azurerm_virtual_network.vnet.name
-  address_prefixes                               = ["10.0.2.0/24"]
+  name                 = "snet-pe"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.0.2.0/24"]
 }
 
 data "azurerm_client_config" "current" {}

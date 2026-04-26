@@ -30,11 +30,13 @@ variable "pfx_password" {
 variable "keyvault_name" {
   description = "Name of the Key Vault."
   type        = string
+  default     = "kv-lab-8ae187ea"
 }
 
 variable "eventhub_namespace_name" {
   description = "Name of the Event Hub namespace."
   type        = string
+  default     = "evh-lab-8ae187ea"
 }
 
 variable "topics" {
