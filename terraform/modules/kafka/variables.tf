@@ -49,6 +49,12 @@ variable "schema_registry_url" {
   default     = null
 }
 
+variable "sr_scope" {
+  description = "OAuth scope for the Schema Registry (api://<apicurio-client-id>/.default)."
+  type        = string
+  default     = null
+}
+
 variable "consumer_group_id" {
   description = "Kafka consumer group ID written into client.properties."
   type        = string

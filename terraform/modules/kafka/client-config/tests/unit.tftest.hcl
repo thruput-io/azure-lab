@@ -13,6 +13,7 @@ variables {
   eventhub_scope      = "https://evh-unit-test.servicebus.windows.net/.default"
   token_endpoint_url  = "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000001/oauth2/v2.0/token"
   schema_registry_url = "https://eventhub.example.com"
+  sr_scope            = "api://apicurio-client-id/.default"
   consumer_group_id   = "grayskull-consumer-group"
 }
 
@@ -87,8 +88,40 @@ run "client_props_has_token_endpoint" {
 run "client_props_has_sr_url" {
   command = plan
   assert {
-    condition     = strcontains(output.client_properties, "schema.registry.url=")
+    condition     = strcontains(output.client_properties, "schema.registry.url=https://eventhub.example.com")
     error_message = "client.properties must contain 'schema.registry.url=' when schema_registry_url is set"
+  }
+}
+
+run "client_props_has_bearer_auth_issuer" {
+  command = plan
+  assert {
+    condition     = strcontains(output.client_properties, "bearer.auth.issuer.endpoint.url=https://login.microsoftonline.com/00000000-0000-0000-0000-000000000001/oauth2/v2.0/token")
+    error_message = "client.properties must contain 'bearer.auth.issuer.endpoint.url='"
+  }
+}
+
+run "client_props_has_bearer_auth_client_id" {
+  command = plan
+  assert {
+    condition     = strcontains(output.client_properties, "bearer.auth.client.id=c9903fe3-a886-4e0e-b59f-bf52242facb3")
+    error_message = "client.properties must contain 'bearer.auth.client.id='"
+  }
+}
+
+run "client_props_has_bearer_auth_client_secret" {
+  command = plan
+  assert {
+    condition     = strcontains(output.client_properties, "bearer.auth.client.secret=mock-client-secret")
+    error_message = "client.properties must contain 'bearer.auth.client.secret='"
+  }
+}
+
+run "client_props_has_bearer_auth_scope" {
+  command = plan
+  assert {
+    condition     = strcontains(output.client_properties, "bearer.auth.scope=api://apicurio-client-id/.default")
+    error_message = "client.properties must contain 'bearer.auth.scope='"
   }
 }
 

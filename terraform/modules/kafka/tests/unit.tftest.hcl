@@ -49,6 +49,7 @@ variables {
   custom_domain_name  = "eventhub.example.com"
   tenant_id           = "00000000-0000-0000-0000-000000000001"
   schema_registry_url = "https://eventhub.example.com"
+  sr_scope            = "api://apicurio-client-id/.default"
   consumer_group_id   = "grayskull-consumer-group"
   key_vault_id        = "/subscriptions/00000000/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv-test"
   topics = {

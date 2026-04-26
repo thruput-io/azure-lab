@@ -81,6 +81,7 @@ module "client_config" {
   eventhub_scope      = local.eventhub_scope
   token_endpoint_url  = local.token_endpoint_url
   schema_registry_url = var.schema_registry_url
+  sr_scope            = var.sr_scope
   consumer_group_id   = var.consumer_group_id
 }
 

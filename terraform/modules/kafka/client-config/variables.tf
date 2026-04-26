@@ -37,4 +37,10 @@ variable "consumer_group_id" {
   default     = "default-consumer-group"
 }
 
+variable "sr_scope" {
+  description = "OAuth scope for the Schema Registry (api://<apicurio-client-id>/.default)."
+  type        = string
+  default     = null
+}
+
 
