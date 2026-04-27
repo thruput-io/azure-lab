@@ -50,6 +50,7 @@ jobs:
     - name: Terraform Plan
       run: terraform plan -no-color -input=false
       env:
+        TF_VAR_topics: '{"orders.placed":{"name":"orders.placed","partition_count":4,"message_retention":1},"checks.kafka":{"name":"checks.kafka","partition_count":2,"message_retention":1}}'
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
@@ -62,6 +63,7 @@ jobs:
       if: github.ref == 'refs/heads/main'
       run: terraform apply -auto-approve -input=false
       env:
+        TF_VAR_topics: '{"orders.placed":{"name":"orders.placed","partition_count":4,"message_retention":1},"checks.kafka":{"name":"checks.kafka","partition_count":2,"message_retention":1}}'
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
