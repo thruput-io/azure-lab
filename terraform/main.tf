@@ -42,13 +42,7 @@ module "keyvault" {
   deployer_object_id  = data.azurerm_client_config.current.object_id
   pfx_base64          = var.pfx_base64
   pfx_password        = var.pfx_password
-}
-
-# Grant Application Gateway Identity access to read Key Vault Secrets (Certificates)
-resource "azurerm_role_assignment" "appgw_kv_secrets_user" {
-  scope                = module.keyvault.id
-  role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_user_assigned_identity.appgw.principal_id
+  appgw_principal_id  = azurerm_user_assigned_identity.appgw.principal_id
 }
 
 module "kafka" {

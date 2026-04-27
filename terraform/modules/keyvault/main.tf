@@ -28,6 +28,12 @@ resource "azurerm_role_assignment" "appgw_secrets_user" {
   principal_id         = var.appgw_principal_id
 }
 
+resource "time_sleep" "wait_for_appgw_rbac" {
+  count           = var.appgw_principal_id != null ? 1 : 0
+  depends_on      = [azurerm_role_assignment.appgw_secrets_user]
+  create_duration = "30s"
+}
+
 resource "azurerm_key_vault_certificate" "cert" {
   count        = (var.pfx_base64 != null && var.pfx_password != null) ? 1 : 0
   name         = "appgw-custom-cert"

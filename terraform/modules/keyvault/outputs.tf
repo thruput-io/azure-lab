@@ -16,4 +16,6 @@ output "uri" {
 output "cert_secret_id" {
   description = "Secret ID of the uploaded PFX certificate (null if no cert provided)."
   value       = length(azurerm_key_vault_certificate.cert) > 0 ? azurerm_key_vault_certificate.cert[0].secret_id : null
+  depends_on  = [time_sleep.wait_for_appgw_rbac]
 }
+
