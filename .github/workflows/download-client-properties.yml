@@ -6,38 +6,71 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: ./terraform
+
 jobs:
   download:
     name: 'Download client.properties'
     runs-on: ubuntu-latest
 
     steps:
-    - name: Write properties files from secrets
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Azure Login
+      uses: azure/login@v1
       env:
-        KAFKA_CLIENT_PROPERTIES: ${{ secrets.KAFKA_CLIENT_PROPERTIES }}
-        SCHEMA_CLIENT_PROPERTIES: ${{ secrets.SCHEMA_CLIENT_PROPERTIES }}
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+
+    - name: Terraform Init
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
+      run: terraform init -input=false
+
+    - name: Download exact client.properties from Key Vault
+      working-directory: .
       run: |
         set -euo pipefail
-        
-        # Kafka properties
-        printf '%s' "$KAFKA_CLIENT_PROPERTIES" > kafka-client.properties
-        if [ ! -s kafka-client.properties ]; then
-          echo "ERROR: KAFKA_CLIENT_PROPERTIES secret is empty."
-          exit 1
-        fi
-        if ! grep -q '^bootstrap\.servers=' kafka-client.properties; then
-          echo "ERROR: kafka-client.properties missing required bootstrap.servers entry."
+
+        KV_NAME="$(terraform -chdir=terraform output -raw key_vault_name)"
+        if [ -z "$KV_NAME" ]; then
+          echo "ERROR: Terraform output key_vault_name is empty"
           exit 1
         fi
 
-        # Schema properties
-        printf '%s' "$SCHEMA_CLIENT_PROPERTIES" > schema-client.properties
-        if [ ! -s schema-client.properties ]; then
-          echo "ERROR: SCHEMA_CLIENT_PROPERTIES secret is empty."
+        CLIENT_PROPERTIES="$(az keyvault secret show \
+          --vault-name "$KV_NAME" \
+          --name client-properties \
+          --query value -o tsv)"
+
+        printf '%s' "$CLIENT_PROPERTIES" > client.properties
+        if [ ! -s client.properties ]; then
+          echo "ERROR: client.properties is empty."
           exit 1
         fi
-        if ! grep -q '^schema\.registry\.url=' schema-client.properties; then
-          echo "ERROR: schema-client.properties missing required schema.registry.url entry."
+
+        if ! grep -q '^bootstrap\.servers=' client.properties; then
+          echo "ERROR: client.properties missing required bootstrap.servers entry."
+          exit 1
+        fi
+
+        if ! grep -q '^schema\.registry\.url=' client.properties; then
+          echo "ERROR: client.properties missing required schema.registry.url entry."
           exit 1
         fi
 
@@ -48,6 +81,5 @@ jobs:
       with:
         name: client-properties
         path: |
-          kafka-client.properties
-          schema-client.properties
+          client.properties
         retention-days: 10
