@@ -141,10 +141,10 @@ jobs:
         # Update KAFKA_CLIENT_PROPERTIES
         KAFKA_VALUE="$(az keyvault secret show \
           --vault-name "$KV_NAME" \
-          --name kafka-client-properties \
+          --name client-properties \
           --query value -o tsv)"
         if [ -z "$KAFKA_VALUE" ]; then
-          echo "ERROR: Key Vault secret kafka-client-properties is empty"
+          echo "ERROR: Key Vault secret client-properties is empty"
           exit 1
         fi
         printf '%s' "$KAFKA_VALUE" | gh secret set KAFKA_CLIENT_PROPERTIES
@@ -154,7 +154,11 @@ jobs:
         SCHEMA_VALUE="$(az keyvault secret show \
           --vault-name "$KV_NAME" \
           --name schema-client-properties \
-          --query value -o tsv)"
+          --query value -o tsv 2>/dev/null || true)"
+        if [ -z "$SCHEMA_VALUE" ]; then
+          SCHEMA_VALUE="$KAFKA_VALUE"
+          echo "schema-client-properties not found; using client-properties artifact for SCHEMA_CLIENT_PROPERTIES"
+        fi
         if [ -z "$SCHEMA_VALUE" ]; then
           echo "ERROR: Key Vault secret schema-client-properties is empty"
           exit 1
