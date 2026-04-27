@@ -1,9 +1,9 @@
 resource "azurerm_eventhub_namespace" "this" {
-  name                = var.namespace_name
-  location            = var.location
-  resource_group_name = var.resource_group_name
-  sku                 = "Premium"
-  capacity            = 1
+  name                          = var.namespace_name
+  location                      = var.location
+  resource_group_name           = var.resource_group_name
+  sku                           = "Premium"
+  capacity                      = 1
   public_network_access_enabled = false
 }
 

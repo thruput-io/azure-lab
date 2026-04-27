@@ -26,6 +26,13 @@ resource "azurerm_subnet" "pe_subnet" {
 
 data "azurerm_client_config" "current" {}
 
+# Identity for Application Gateway to read certificates from Key Vault
+resource "azurerm_user_assigned_identity" "appgw" {
+  name                = "id-appgw-cert"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+}
+
 module "keyvault" {
   source              = "./modules/keyvault"
   name                = var.keyvault_name
@@ -33,6 +40,15 @@ module "keyvault" {
   resource_group_name = azurerm_resource_group.rg.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
   deployer_object_id  = data.azurerm_client_config.current.object_id
+  pfx_base64          = var.pfx_base64
+  pfx_password        = var.pfx_password
+}
+
+# Grant Application Gateway Identity access to read Key Vault Secrets (Certificates)
+resource "azurerm_role_assignment" "appgw_kv_secrets_user" {
+  scope                = module.keyvault.id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.appgw.principal_id
 }
 
 module "kafka" {
@@ -48,5 +64,11 @@ module "kafka" {
   schema_registry_url = "https://${var.custom_domain_name}"
   sr_scope            = "api://${azuread_application.apicurio.client_id}/.default"
   key_vault_id        = module.keyvault.id
+
+  # App Gateway variables
+  appgw_subnet_id   = azurerm_subnet.appgw_subnet.id
+  appgw_identity_id = azurerm_user_assigned_identity.appgw.id
+  kv_cert_secret_id = module.keyvault.cert_secret_id
 }
+
 

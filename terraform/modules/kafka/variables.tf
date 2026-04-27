@@ -65,3 +65,25 @@ variable "key_vault_id" {
   description = "Key Vault resource ID where client config secrets are stored."
   type        = string
 }
+
+variable "appgw_subnet_id" {
+  description = "Subnet ID for the Application Gateway."
+  type        = string
+}
+
+variable "appgw_identity_id" {
+  description = "User-assigned managed identity ID for Key Vault certificate access."
+  type        = string
+}
+
+variable "kv_cert_secret_id" {
+  description = "Key Vault secret ID of the TLS certificate."
+  type        = string
+}
+
+variable "apicurio_fqdn" {
+  description = "FQDN of the Apicurio container group. If null, a dummy value is used for App Gateway."
+  type        = string
+  default     = "apicurio.local"
+}
+

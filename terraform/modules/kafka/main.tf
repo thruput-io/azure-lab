@@ -95,3 +95,21 @@ resource "azurerm_key_vault_secret" "client_properties" {
   value        = module.client_config.client_properties
   content_type = "text/x-java-properties"
 }
+
+# ============================================================
+# Application Gateway for Kafka and Apicurio routing
+# ============================================================
+module "app_gateway" {
+  source = "./app-gateway"
+
+  name                    = "appgw-${var.namespace_name}"
+  location                = var.location
+  resource_group_name     = var.resource_group_name
+  appgw_subnet_id         = var.appgw_subnet_id
+  identity_id             = var.appgw_identity_id
+  kv_cert_secret_id       = var.kv_cert_secret_id
+  custom_domain_name      = var.custom_domain_name
+  eventhub_namespace_fqdn = "${var.namespace_name}.servicebus.windows.net"
+  apicurio_fqdn           = var.apicurio_fqdn
+}
+
