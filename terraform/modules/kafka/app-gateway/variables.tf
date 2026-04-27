@@ -45,6 +45,11 @@ variable "eventhub_namespace_fqdn" {
   type        = string
 }
 
+variable "eventhub_private_ip" {
+  description = "Private IP of the Event Hub namespace (from Private Endpoint)."
+  type        = string
+}
+
 variable "apicurio_fqdn" {
   description = "FQDN of the Apicurio container group."
   type        = string

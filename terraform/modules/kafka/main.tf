@@ -110,6 +110,7 @@ module "app_gateway" {
   kv_cert_secret_id       = var.kv_cert_secret_id
   custom_domain_name      = var.custom_domain_name
   eventhub_namespace_fqdn = "${var.namespace_name}.servicebus.windows.net"
+  eventhub_private_ip     = module.eventhub.private_ip_address
   apicurio_fqdn           = var.apicurio_fqdn
 }
 

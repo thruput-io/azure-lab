@@ -55,8 +55,8 @@ resource "azurerm_application_gateway" "this" {
   }
 
   backend_address_pool {
-    name  = "evh-beap"
-    fqdns = [var.eventhub_namespace_fqdn]
+    name         = "evh-beap"
+    ip_addresses = [var.eventhub_private_ip]
   }
 
   backend_address_pool {
