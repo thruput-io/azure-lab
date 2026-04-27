@@ -128,7 +128,7 @@ resource "azurerm_application_gateway" "this" {
     frontend_port_name             = "port_5671"
     protocol                       = "Tls"
     ssl_certificate_name           = "managed-cert"
-    host_names                     = [var.custom_domain_name]
+    host_names                     = [var.custom_domain_name, var.eventhub_namespace_fqdn]
   }
 
   listener {
@@ -137,7 +137,7 @@ resource "azurerm_application_gateway" "this" {
     frontend_port_name             = "port_9093"
     protocol                       = "Tls"
     ssl_certificate_name           = "managed-cert"
-    host_names                     = [var.custom_domain_name]
+    host_names                     = [var.custom_domain_name, var.eventhub_namespace_fqdn]
   }
 
   # L7 Rule
