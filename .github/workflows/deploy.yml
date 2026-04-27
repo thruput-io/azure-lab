@@ -150,21 +150,6 @@ jobs:
         printf '%s' "$KAFKA_VALUE" | gh secret set KAFKA_CLIENT_PROPERTIES
         echo "KAFKA_CLIENT_PROPERTIES secret updated"
 
-        # Update SCHEMA_CLIENT_PROPERTIES
-        SCHEMA_VALUE="$(az keyvault secret show \
-          --vault-name "$KV_NAME" \
-          --name schema-client-properties \
-          --query value -o tsv 2>/dev/null || true)"
-        if [ -z "$SCHEMA_VALUE" ]; then
-          SCHEMA_VALUE="$KAFKA_VALUE"
-          echo "schema-client-properties not found; using client-properties artifact for SCHEMA_CLIENT_PROPERTIES"
-        fi
-        if [ -z "$SCHEMA_VALUE" ]; then
-          echo "ERROR: Key Vault secret schema-client-properties is empty"
-          exit 1
-        fi
-        printf '%s' "$SCHEMA_VALUE" | gh secret set SCHEMA_CLIENT_PROPERTIES
-        echo "SCHEMA_CLIENT_PROPERTIES secret updated"
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
