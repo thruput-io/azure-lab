@@ -52,6 +52,11 @@ jobs:
     - name: Terraform Plan
       run: terraform plan -no-color -input=false
       env:
+        TF_VAR_location: East US
+        TF_VAR_resource_group_name: rg-eventhub-appgw-lab
+        TF_VAR_keyvault_name: kv-lab-8ae187ea
+        TF_VAR_eventhub_namespace_name: evh-lab-8ae187ea
+        TF_VAR_topics: '{"orders.placed":{"name":"orders.placed","partition_count":4,"message_retention":1},"checks.kafka":{"name":"checks.kafka","partition_count":2,"message_retention":1}}'
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
@@ -95,6 +100,11 @@ jobs:
       if: github.ref == 'refs/heads/main'
       run: terraform apply -auto-approve -input=false -target=azurerm_container_registry.acr
       env:
+        TF_VAR_location: East US
+        TF_VAR_resource_group_name: rg-eventhub-appgw-lab
+        TF_VAR_keyvault_name: kv-lab-8ae187ea
+        TF_VAR_eventhub_namespace_name: evh-lab-8ae187ea
+        TF_VAR_topics: '{"orders.placed":{"name":"orders.placed","partition_count":4,"message_retention":1},"checks.kafka":{"name":"checks.kafka","partition_count":2,"message_retention":1}}'
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
@@ -121,6 +131,11 @@ jobs:
       if: github.ref == 'refs/heads/main'
       run: terraform apply -auto-approve -input=false
       env:
+        TF_VAR_location: East US
+        TF_VAR_resource_group_name: rg-eventhub-appgw-lab
+        TF_VAR_keyvault_name: kv-lab-8ae187ea
+        TF_VAR_eventhub_namespace_name: evh-lab-8ae187ea
+        TF_VAR_topics: '{"orders.placed":{"name":"orders.placed","partition_count":4,"message_retention":1},"checks.kafka":{"name":"checks.kafka","partition_count":2,"message_retention":1}}'
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
