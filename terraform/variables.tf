@@ -1,13 +1,11 @@
 variable "location" {
   description = "The Azure Region in which all resources should be created."
   type        = string
-  default     = "East US"
 }
 
 variable "resource_group_name" {
   description = "The name of the resource group."
   type        = string
-  default     = "rg-eventhub-appgw-lab"
 }
 
 variable "custom_domain_name" {
@@ -30,13 +28,11 @@ variable "pfx_password" {
 variable "keyvault_name" {
   description = "Name of the Key Vault."
   type        = string
-  default     = "kv-lab-8ae187ea"
 }
 
 variable "eventhub_namespace_name" {
   description = "Name of the Event Hub namespace."
   type        = string
-  default     = "evh-lab-8ae187ea"
 }
 
 variable "topics" {
@@ -46,5 +42,4 @@ variable "topics" {
     partition_count   = number
     message_retention = number
   }))
-  default = {}
 }

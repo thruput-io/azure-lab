@@ -20,3 +20,7 @@ The project maintains the canonical client configuration format for the infrastr
 *   **Scripts and Tests:** Must accept a configuration file as their only input and pass it as-is to tools. Do not hardcode or override properties in scripts.
 *   **Local Testing:** Use standard Confluent Docker images (`cp-kafka`, `cp-schema-registry`) to validate infrastructure. 
 *   **Feedback Loop:** If a property is missing or wrong, the fix must be applied to the **Terraform modules**, not the consuming script or a local file.
+
+## 5. Deterministic Configuration (No Defaults)
+*   **No Defaults:** This is a Proof-of-Concept project focused on finding and defining an exact environment. We require completely deterministic behavior. **Never use `default` values in Terraform variables** or any configuration files.
+*   **Explicit Definition:** All variables must be explicitly provided (e.g., via a `terraform.tfvars` file or explicit CI/CD environment variables) to ensure the environment state is fully visible and trackable.

@@ -30,9 +30,9 @@ variable "schema" {
 }
 
 locals {
-  schema_file  = "/tmp/sr-inttest-schema-${replace(var.subject, "/", "-")}.json"
-  id_file      = "/tmp/sr-inttest-id-${replace(var.subject, "/", "-")}.txt"
-  list_file    = "/tmp/sr-inttest-subjects-${replace(var.subject, "/", "-")}.txt"
+  schema_file = "/tmp/sr-inttest-schema-${replace(var.subject, "/", "-")}.json"
+  id_file     = "/tmp/sr-inttest-id-${replace(var.subject, "/", "-")}.txt"
+  list_file   = "/tmp/sr-inttest-subjects-${replace(var.subject, "/", "-")}.txt"
 }
 
 # Wait for Apicurio to be healthy before posting

@@ -76,13 +76,13 @@ run "produce_consume_roundtrip" {
   }
 
   variables {
-    namespace_name     = run.setup.namespace_name
-    topic_name         = run.deploy_eventhub.topic_names["inttest"]
-    connection_string  = run.deploy_eventhub.default_primary_connection_string
-    tenant_id          = run.setup.tenant_id
-    client_id          = run.setup.client_id
-    client_secret      = run.setup.client_secret
-    eventhub_scope     = "https://${run.setup.namespace_name}.servicebus.windows.net/.default"
+    namespace_name    = run.setup.namespace_name
+    topic_name        = run.deploy_eventhub.topic_names["inttest"]
+    connection_string = run.deploy_eventhub.default_primary_connection_string
+    tenant_id         = run.setup.tenant_id
+    client_id         = run.setup.client_id
+    client_secret     = run.setup.client_secret
+    eventhub_scope    = "https://${run.setup.namespace_name}.servicebus.windows.net/.default"
   }
 
   assert {

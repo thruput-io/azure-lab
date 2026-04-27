@@ -75,9 +75,9 @@ run "e2e_roundtrip" {
   }
   variables {
     java_client_properties = run.deploy_kafka.client_properties
-    bootstrap_servers   = run.deploy_kafka.bootstrap_servers
-    topic_name          = "internal.test.test-event.event.v1"
-    schema_registry_url = var.schema_registry_url
+    bootstrap_servers      = run.deploy_kafka.bootstrap_servers
+    topic_name             = "internal.test.test-event.event.v1"
+    schema_registry_url    = var.schema_registry_url
   }
 
   assert {
