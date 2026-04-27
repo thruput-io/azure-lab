@@ -98,7 +98,23 @@ jobs:
 
     - name: Terraform Apply (full)
       if: github.ref == 'refs/heads/main'
-      run: terraform apply -auto-approve -input=false
+      run: |
+        set -euo pipefail
+        ATTEMPTS=3
+        for i in $(seq 1 $ATTEMPTS); do
+          echo "Terraform apply attempt $i/$ATTEMPTS"
+          if terraform apply -auto-approve -input=false; then
+            exit 0
+          fi
+
+          if [ "$i" -lt "$ATTEMPTS" ]; then
+            echo "Apply failed, waiting 60s for RBAC propagation before retry..."
+            sleep 60
+          fi
+        done
+
+        echo "Terraform apply failed after $ATTEMPTS attempts"
+        exit 1
       env:
         TF_VAR_location: East US
         TF_VAR_resource_group_name: rg-eventhub-appgw-lab
