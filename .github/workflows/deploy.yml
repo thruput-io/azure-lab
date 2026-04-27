@@ -3,8 +3,6 @@ name: 'Terraform Deploy'
 on:
   push:
     branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
@@ -23,28 +21,28 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v3
+
+    - name: Verify Secrets
+      run: |
+        if [ -z "${{ secrets.PFX_BASE64 }}" ]; then echo "Error: PFX_BASE64 secret is missing"; exit 1; fi
+        if [ -z "${{ secrets.PFX_PASSWORD }}" ]; then echo "Error: PFX_PASSWORD secret is missing"; exit 1; fi
+        if [ -z "${{ vars.CUSTOM_DOMAIN_NAME }}" ] && [ -z "${{ secrets.CUSTOM_DOMAIN_NAME }}" ]; then echo "Error: CUSTOM_DOMAIN_NAME is missing"; exit 1; fi
 
     - name: Set Domain Name
       run: |
         DOMAIN="${{ vars.CUSTOM_DOMAIN_NAME || secrets.CUSTOM_DOMAIN_NAME }}"
-        if [ -z "$DOMAIN" ]; then
-          echo "Error: CUSTOM_DOMAIN_NAME is not set in repository variables or secrets"
-          exit 1
-        fi
         echo "DOMAIN_NAME=$DOMAIN" >> $GITHUB_ENV
 
     - name: Azure Login
-      uses: azure/login@v3
+      uses: azure/login@v1
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v4
-      with:
-        terraform_wrapper: false
+      uses: hashicorp/setup-terraform@v2
 
     - name: Terraform Init
       run: terraform init
@@ -52,11 +50,6 @@ jobs:
     - name: Terraform Plan
       run: terraform plan -no-color -input=false
       env:
-        TF_VAR_location: East US
-        TF_VAR_resource_group_name: rg-eventhub-appgw-lab
-        TF_VAR_keyvault_name: kv-lab-8ae187ea
-        TF_VAR_eventhub_namespace_name: evh-lab-8ae187ea
-        TF_VAR_topics: '{"orders.placed":{"name":"orders.placed","partition_count":4,"message_retention":1},"checks.kafka":{"name":"checks.kafka","partition_count":2,"message_retention":1}}'
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
@@ -65,62 +58,10 @@ jobs:
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
 
-    - name: Remove stale App Gateway objects (Confluent SR leftovers)
+    - name: Terraform Apply
       if: github.ref == 'refs/heads/main'
-      working-directory: ./terraform
-      run: |
-        set -euo pipefail
-        RG="rg-eventhub-appgw-lab"
-        GW="appgw-eventhub-lab"
-
-        # Remove stale probe if it exists
-        if az network application-gateway probe show -g "$RG" --gateway-name "$GW" --name sr-probe &>/dev/null; then
-          echo "Removing stale probe sr-probe..."
-          az network application-gateway probe delete -g "$RG" --gateway-name "$GW" --name sr-probe --no-wait false
-          echo "Probe removed."
-        else
-          echo "Probe sr-probe not found, nothing to remove."
-        fi
-
-        # Remove stale backend http settings if they exist
-        if az network application-gateway http-settings show -g "$RG" --gateway-name "$GW" --name sr-be-htst &>/dev/null; then
-          echo "Removing stale backend-http-settings sr-be-htst..."
-          az network application-gateway http-settings delete -g "$RG" --gateway-name "$GW" --name sr-be-htst --no-wait false
-          echo "Backend settings removed."
-        else
-          echo "Backend settings sr-be-htst not found, nothing to remove."
-        fi
+      run: terraform apply -auto-approve -input=false
       env:
-        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        ARM_USE_OIDC: true
-
-    - name: Terraform Apply (full)
-      if: github.ref == 'refs/heads/main'
-      run: |
-        set -euo pipefail
-        ATTEMPTS=3
-        for i in $(seq 1 $ATTEMPTS); do
-          echo "Terraform apply attempt $i/$ATTEMPTS"
-          if terraform apply -auto-approve -input=false; then
-            exit 0
-          fi
-
-          if [ "$i" -lt "$ATTEMPTS" ]; then
-            echo "Apply failed, waiting 60s for RBAC propagation before retry..."
-            sleep 60
-          fi
-        done
-
-        echo "Terraform apply failed after $ATTEMPTS attempts"
-        exit 1
-      env:
-        TF_VAR_location: East US
-        TF_VAR_resource_group_name: rg-eventhub-appgw-lab
-        TF_VAR_keyvault_name: kv-lab-8ae187ea
-        TF_VAR_eventhub_namespace_name: evh-lab-8ae187ea
-        TF_VAR_topics: '{"orders.placed":{"name":"orders.placed","partition_count":4,"message_retention":1},"checks.kafka":{"name":"checks.kafka","partition_count":2,"message_retention":1}}'
         TF_VAR_custom_domain_name: ${{ env.DOMAIN_NAME }}
         TF_VAR_pfx_base64: ${{ secrets.PFX_BASE64 }}
         TF_VAR_pfx_password: ${{ secrets.PFX_PASSWORD }}
@@ -128,32 +69,3 @@ jobs:
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         ARM_USE_OIDC: true
-    - name: Update GitHub secrets from Key Vault
-      if: github.ref == 'refs/heads/main'
-      run: |
-        set -euo pipefail
-        KV_NAME="$(terraform output -raw key_vault_name)"
-        if [ -z "$KV_NAME" ]; then
-          echo "ERROR: terraform output key_vault_name is empty"
-          exit 1
-        fi
-        
-        # Update KAFKA_CLIENT_PROPERTIES
-        KAFKA_VALUE="$(az keyvault secret show \
-          --vault-name "$KV_NAME" \
-          --name client-properties \
-          --query value -o tsv)"
-        if [ -z "$KAFKA_VALUE" ]; then
-          echo "ERROR: Key Vault secret client-properties is empty"
-          exit 1
-        fi
-        printf '%s' "$KAFKA_VALUE" | gh secret set KAFKA_CLIENT_PROPERTIES
-        echo "KAFKA_CLIENT_PROPERTIES secret updated"
-
-      env:
-        GH_TOKEN: ${{ secrets.GH_PAT }}
-        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-        ARM_USE_OIDC: true
-
