@@ -73,7 +73,7 @@ jobs:
     - name: OAuth client.properties contract check
       run: |
         set -euo pipefail
-        printf 'module.kafka.client_properties\n' | terraform console > /tmp/client_properties.out
+        timeout 90s terraform console <<< 'module.kafka.client_properties' > /tmp/client_properties.out
 
         sed -e '1d' -e '$d' /tmp/client_properties.out > /tmp/client.properties
 
@@ -94,3 +94,8 @@ jobs:
           echo 'ERROR: $ConnectionString is forbidden in canonical client.properties'
           exit 1
         fi
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
