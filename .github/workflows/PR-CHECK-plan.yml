@@ -76,9 +76,7 @@ jobs:
       timeout-minutes: 2
       run: |
         set -euo pipefail
-        timeout 90s terraform console <<< 'module.kafka.client_properties' > /tmp/client_properties.out
-
-        sed -e '1d' -e '$d' /tmp/client_properties.out > /tmp/client.properties
+        terraform output -raw client_properties > /tmp/client.properties
 
         grep -q '^bootstrap\.servers=' /tmp/client.properties || { echo 'ERROR: Missing bootstrap.servers'; exit 1; }
         grep -q '^security\.protocol=SASL_SSL$' /tmp/client.properties || { echo 'ERROR: Missing security.protocol=SASL_SSL'; exit 1; }
