@@ -34,7 +34,7 @@ jobs:
       uses: hashicorp/setup-terraform@v2
 
     - name: Terraform Init
-      run: terraform init -input=false
+      run: terraform init -input=false -backend-config="key=tfstate/pr-${{ github.event.pull_request.number }}.tfstate"
 
     - name: Ensure App Gateway cert secrets exist in Key Vault
       run: |
