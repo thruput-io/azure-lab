@@ -26,6 +26,16 @@ resource "azurerm_subnet" "pe_subnet" {
 
 data "azurerm_client_config" "current" {}
 
+data "azurerm_key_vault_secret" "appgw_pfx_base64" {
+  name         = "appgw-pfx-base64"
+  key_vault_id = module.keyvault.id
+}
+
+data "azurerm_key_vault_secret" "appgw_pfx_password" {
+  name         = "appgw-pfx-password"
+  key_vault_id = module.keyvault.id
+}
+
 # Identity for Application Gateway to read certificates from Key Vault
 resource "azurerm_user_assigned_identity" "appgw" {
   name                = "id-appgw-cert"
@@ -40,8 +50,8 @@ module "keyvault" {
   resource_group_name = azurerm_resource_group.rg.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
   deployer_object_id  = data.azurerm_client_config.current.object_id
-  pfx_base64          = var.pfx_base64
-  pfx_password        = var.pfx_password
+  pfx_base64          = data.azurerm_key_vault_secret.appgw_pfx_base64.value
+  pfx_password        = data.azurerm_key_vault_secret.appgw_pfx_password.value
   appgw_principal_id  = azurerm_user_assigned_identity.appgw.principal_id
 }
 

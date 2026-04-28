@@ -1,5 +1,6 @@
 location                = "East US"
 resource_group_name     = "rg-eventhub-appgw-lab"
+custom_domain_name      = "eventhub.grayskull.se"
 keyvault_name           = "kv-lab-8ae187ea"
 eventhub_namespace_name = "evh-lab-8ae187ea"
 topics = {
