@@ -26,14 +26,19 @@ resource "azurerm_subnet" "pe_subnet" {
 
 data "azurerm_client_config" "current" {}
 
+data "azurerm_key_vault" "existing" {
+  name                = var.keyvault_name
+  resource_group_name = var.resource_group_name
+}
+
 data "azurerm_key_vault_secret" "appgw_pfx_base64" {
   name         = "appgw-pfx-base64"
-  key_vault_id = module.keyvault.id
+  key_vault_id = data.azurerm_key_vault.existing.id
 }
 
 data "azurerm_key_vault_secret" "appgw_pfx_password" {
   name         = "appgw-pfx-password"
-  key_vault_id = module.keyvault.id
+  key_vault_id = data.azurerm_key_vault.existing.id
 }
 
 # Identity for Application Gateway to read certificates from Key Vault
