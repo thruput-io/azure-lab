@@ -36,6 +36,32 @@ jobs:
     - name: Terraform Init
       run: terraform init -input=false
 
+    - name: Ensure App Gateway cert secrets exist in Key Vault
+      run: |
+        set -euo pipefail
+
+        KV_NAME="$(sed -nE 's/^keyvault_name\s*=\s*"([^"]+)"/\1/p' terraform.tfvars | head -n1)"
+        if [ -z "$KV_NAME" ]; then
+          echo "ERROR: Could not resolve keyvault_name from terraform.tfvars"
+          exit 1
+        fi
+
+        if ! az keyvault secret show --vault-name "$KV_NAME" --name appgw-pfx-base64 >/dev/null 2>&1; then
+          if [ -z "${PFX_BASE64:-}" ] || [ -z "${PFX_PASSWORD:-}" ]; then
+            echo "ERROR: Missing Key Vault cert secrets and PFX fallback secrets are not configured"
+            exit 1
+          fi
+
+          az keyvault secret set --vault-name "$KV_NAME" --name appgw-pfx-base64 --value "$PFX_BASE64" >/dev/null
+          az keyvault secret set --vault-name "$KV_NAME" --name appgw-pfx-password --value "$PFX_PASSWORD" >/dev/null
+          echo "Seeded missing App Gateway cert secrets in Key Vault"
+        else
+          echo "App Gateway cert secrets already present in Key Vault"
+        fi
+      env:
+        PFX_BASE64: ${{ secrets.PFX_BASE64 }}
+        PFX_PASSWORD: ${{ secrets.PFX_PASSWORD }}
+
     - name: Terraform Plan
       run: terraform plan -no-color -input=false
       env:
