@@ -13,6 +13,7 @@ jobs:
     name: 'Terraform Plan + OAuth contract'
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 12
 
     defaults:
       run:
@@ -63,6 +64,7 @@ jobs:
         PFX_PASSWORD: ${{ secrets.PFX_PASSWORD }}
 
     - name: Terraform Plan
+      timeout-minutes: 5
       run: terraform plan -no-color -input=false
       env:
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -71,6 +73,7 @@ jobs:
         ARM_USE_OIDC: true
 
     - name: OAuth client.properties contract check
+      timeout-minutes: 2
       run: |
         set -euo pipefail
         timeout 90s terraform console <<< 'module.kafka.client_properties' > /tmp/client_properties.out
