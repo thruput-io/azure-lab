@@ -12,6 +12,7 @@ jobs:
   terraform-plan:
     name: 'Terraform Plan + OAuth contract'
     runs-on: ubuntu-latest
+    environment: production
 
     defaults:
       run:
