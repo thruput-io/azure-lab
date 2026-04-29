@@ -39,24 +39,6 @@ jobs:
       with:
         terraform_wrapper: false
 
-    - name: Bootstrap tfstate storage
-      timeout-minutes: 2
-      run: |
-        set -euo pipefail
-        RG=tfstate-rg
-        SA=tfstate1776442465
-        CONTAINER=tfstate
-        LOCATION=eastus
-        if ! az group show --name "$RG" >/dev/null 2>&1; then
-          az group create --name "$RG" --location "$LOCATION"
-        fi
-        if ! az storage account show --name "$SA" --resource-group "$RG" >/dev/null 2>&1; then
-          az storage account create --name "$SA" --resource-group "$RG" --location "$LOCATION" --sku Standard_LRS --allow-blob-public-access false
-        fi
-        if ! az storage container show --name "$CONTAINER" --account-name "$SA" --auth-mode login >/dev/null 2>&1; then
-          az storage container create --name "$CONTAINER" --account-name "$SA" --auth-mode login
-        fi
-
     - name: Terraform Init
       timeout-minutes: 2
       run: terraform init
