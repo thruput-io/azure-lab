@@ -9,7 +9,7 @@ The primary goal of this project is to produce **working, Confluent-compatible c
 *   **Never create or commit local configuration files** (e.g., `.properties`) to the repository. They are "lies" that distract from fixing the source in Terraform.
 
 ## 2. Confluent Compatibility is the Gate
-*   We only support features and configurations that work with standard **Confluent KafkaSerdes** (Avro, Schema Registry client) and **librdkafka**.
+*   We only support features and configurations that work with standard **Confluent KafkaSerdes** (JSON Schema, Schema Registry client) and **librdkafka**.
 *   If a feature cannot be expressed as standard properties consumed by these libraries, it is out of scope.
 
 ## 3. Standardized Formats
@@ -23,4 +23,3 @@ The project maintains the canonical client configuration format for the infrastr
 
 ## 5. Deterministic Configuration (No Defaults)
 *   **No Defaults:** This is a Proof-of-Concept project focused on finding and defining an exact environment. We require completely deterministic behavior. **Never use `default` values in Terraform variables** or any configuration files.
-*   **Explicit Definition:** All variables must be explicitly provided (e.g., via a `terraform.tfvars` file or explicit CI/CD environment variables) to ensure the environment state is fully visible and trackable.

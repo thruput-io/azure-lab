@@ -13,18 +13,6 @@ variable "custom_domain_name" {
   type        = string
 }
 
-variable "pfx_base64" {
-  description = "Base64 encoded PFX certificate."
-  type        = string
-  sensitive   = true
-}
-
-variable "pfx_password" {
-  description = "Password for the PFX certificate."
-  type        = string
-  sensitive   = true
-}
-
 variable "keyvault_name" {
   description = "Name of the Key Vault."
   type        = string

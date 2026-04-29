@@ -22,14 +22,12 @@ resource "azurerm_role_assignment" "deployer_certificates_officer" {
 }
 
 resource "azurerm_role_assignment" "appgw_secrets_user" {
-  count                = var.appgw_principal_id != null ? 1 : 0
   scope                = azurerm_key_vault.this.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.appgw_principal_id
 }
 
 resource "time_sleep" "wait_for_appgw_rbac" {
-  count           = var.appgw_principal_id != null ? 1 : 0
   depends_on      = [azurerm_role_assignment.appgw_secrets_user]
   create_duration = "30s"
 }
