@@ -17,7 +17,7 @@ jobs:
     name: 'Terraform Plan + OAuth contract'
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 12
+    timeout-minutes: 15
 
     defaults:
       run:
@@ -25,10 +25,11 @@ jobs:
 
     steps:
     - name: Checkout
+      timeout-minutes: 1
       uses: actions/checkout@v3
 
-
     - name: Azure Login
+      timeout-minutes: 1
       uses: azure/login@v1
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -36,12 +37,15 @@ jobs:
         subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     - name: Setup Terraform
+      timeout-minutes: 1
       uses: hashicorp/setup-terraform@v2
 
     - name: Terraform Init
+      timeout-minutes: 2
       run: terraform init -reconfigure -input=false -backend-config="key=tfstate/pr-${{ github.event.pull_request.number }}.tfstate"
 
     - name: Ensure App Gateway cert secrets exist in Key Vault
+      timeout-minutes: 1
       run: |
         set -euo pipefail
 
@@ -68,6 +72,7 @@ jobs:
         PFX_PASSWORD: ${{ secrets.PFX_PASSWORD }}
 
     - name: Release stale PR state lock (best effort)
+      timeout-minutes: 1
       run: |
         ACCOUNT_KEY=$(az storage account keys list \
           --account-name tfstate1776442465 \
@@ -80,8 +85,8 @@ jobs:
           --account-key "$ACCOUNT_KEY" >/dev/null 2>&1 || true
 
     - name: Terraform Plan
-      timeout-minutes: 5
-      run: terraform plan -no-color -input=false -lock-timeout=120s
+      timeout-minutes: 8
+      run: terraform plan -no-color -input=false -lock-timeout=30s
       env:
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -89,7 +94,7 @@ jobs:
         ARM_USE_OIDC: true
 
     - name: OAuth client.properties contract check
-      timeout-minutes: 2
+      timeout-minutes: 1
       run: |
         set -euo pipefail
         terraform output -raw client_properties > /tmp/client.properties
