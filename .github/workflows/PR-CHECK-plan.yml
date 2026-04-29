@@ -69,12 +69,15 @@ jobs:
 
     - name: Release stale PR state lock (best effort)
       run: |
-        set -euo pipefail
+        ACCOUNT_KEY=$(az storage account keys list \
+          --account-name tfstate1776442465 \
+          --resource-group tfstate-rg \
+          --query '[0].value' -o tsv)
         az storage blob lease break \
           --account-name tfstate1776442465 \
           --container-name tfstate \
           --blob-name "tfstate/pr-${{ github.event.pull_request.number }}.tfstate" \
-          --auth-mode login >/dev/null 2>&1 || true
+          --account-key "$ACCOUNT_KEY" >/dev/null 2>&1 || true
 
     - name: Terraform Plan
       timeout-minutes: 5
