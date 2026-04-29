@@ -71,18 +71,6 @@ jobs:
         PFX_BASE64: ${{ secrets.PFX_BASE64 }}
         PFX_PASSWORD: ${{ secrets.PFX_PASSWORD }}
 
-    - name: Release stale PR state lock (best effort)
-      timeout-minutes: 1
-      run: |
-        ACCOUNT_KEY=$(az storage account keys list \
-          --account-name tfstate1776442465 \
-          --resource-group tfstate-rg \
-          --query '[0].value' -o tsv)
-        az storage blob lease break \
-          --account-name tfstate1776442465 \
-          --container-name tfstate \
-          --blob-name "tfstate/pr-${{ github.event.pull_request.number }}.tfstate" \
-          --account-key "$ACCOUNT_KEY" >/dev/null 2>&1 || true
 
     - name: Terraform Plan
       timeout-minutes: 5
