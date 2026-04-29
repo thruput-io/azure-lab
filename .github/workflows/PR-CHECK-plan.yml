@@ -26,11 +26,11 @@ jobs:
     steps:
     - name: Checkout
       timeout-minutes: 1
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Azure Login
       timeout-minutes: 1
-      uses: azure/login@v1
+      uses: azure/login@v3
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -38,10 +38,10 @@ jobs:
 
     - name: Setup Terraform
       timeout-minutes: 1
-      uses: hashicorp/setup-terraform@v2
+      uses: hashicorp/setup-terraform@v4
 
     - name: Terraform Init
-      timeout-minutes: 2
+      timeout-minutes: 3
       run: terraform init -reconfigure -input=false -backend-config="key=tfstate/pr-${{ github.event.pull_request.number }}.tfstate"
 
     - name: Ensure App Gateway cert secrets exist in Key Vault
@@ -85,7 +85,7 @@ jobs:
           --account-key "$ACCOUNT_KEY" >/dev/null 2>&1 || true
 
     - name: Terraform Plan
-      timeout-minutes: 8
+      timeout-minutes: 5
       run: terraform plan -no-color -input=false -lock-timeout=30s
       env:
         ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
