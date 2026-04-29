@@ -1,116 +1,62 @@
-name: 'Kafka Tests'
+name: 'Kafka E2E Tests'
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'terraform/modules/kafka/**'
+
+concurrency:
+  group: kafka-tests-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
-  kafka-tests:
-    name: 'Kafka Tests'
+  e2e:
+    name: 'Kafka E2E'
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: ./terraform/modules/kafka
 
     steps:
     - name: Checkout
+      timeout-minutes: 1
       uses: actions/checkout@v4
 
-    # ---------------------------------------------------------------
-    # Write client.properties from the repository secret.
-    # The secret KAFKA_CLIENT_PROPERTIES holds the full file content
-    # (populated credentials — do NOT commit to git).
-    # All values (bootstrap, topics, OAuth) come from this file.
-    # No Azure login or Key Vault call is needed.
-    # ---------------------------------------------------------------
-    - name: Load client.properties
-      id: creds
+    - name: Azure Login
+      timeout-minutes: 1
+      uses: azure/login@v3
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+    - name: Setup Terraform
+      timeout-minutes: 1
+      uses: hashicorp/setup-terraform@v4
+
+    - name: Terraform Init
+      timeout-minutes: 3
+      run: terraform init -input=false
       env:
-        KAFKA_CLIENT_PROPERTIES: ${{ secrets.KAFKA_CLIENT_PROPERTIES }}
-      run: |
-        set -euo pipefail
-        PROPS_FILE="/tmp/client.properties"
-        # Pass secret via env var to avoid inline substitution breaking shell quoting
-        # (the secret contains double-quotes in JAAS config that would break printf "...")
-        printf '%s' "$KAFKA_CLIENT_PROPERTIES" > "$PROPS_FILE"
-        sed -i 's/\r$//' "$PROPS_FILE"
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
 
-        if [ ! -s "$PROPS_FILE" ]; then
-          echo "ERROR: KAFKA_CLIENT_PROPERTIES secret is empty — set it in repo Settings → Secrets"
-          exit 1
-        fi
-        if ! grep -q '^bootstrap.servers=' "$PROPS_FILE"; then
-          echo "ERROR: client.properties is missing bootstrap.servers"
-          exit 1
-        fi
-        if ! grep -q '^checks_topic=' "$PROPS_FILE"; then
-          echo "ERROR: client.properties is missing checks_topic"
-          exit 1
-        fi
-
-        BOOTSTRAP=$(grep '^bootstrap.servers=' "$PROPS_FILE" | cut -d= -f2-)
-        DOMAIN=$(echo "$BOOTSTRAP" | cut -d: -f1)
-
-        echo "domain=$DOMAIN"         >> $GITHUB_OUTPUT
-        echo "props_file=$PROPS_FILE" >> $GITHUB_OUTPUT
-        echo "Loaded: bootstrap=$BOOTSTRAP"
-
-    # ---------------------------------------------------------------
-    # Check 1 — Connectivity + SSL
-    # TLS handshake on :443 (HTTPS) and :9093 (Kafka)
-    # ---------------------------------------------------------------
-    - name: 'Check 1 — Connectivity + SSL'
-      id: check1
-      run: |
-        set -euo pipefail
-        DOMAIN="${{ steps.creds.outputs.domain }}"
-
-        echo "==> [1a] TLS certificate on ${DOMAIN}:443 ..."
-        CERT_RESULT=$(echo | openssl s_client -connect "${DOMAIN}:443" -servername "$DOMAIN" 2>/dev/null)
-        if ! echo "$CERT_RESULT" | grep -q "Verify return code: 0 (ok)"; then
-          echo "FAIL: TLS certificate verification failed on :443"
-          exit 1
-        fi
-        EXPIRY=$(echo "$CERT_RESULT" | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
-        EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
-        DAYS_LEFT=$(( (EXPIRY_EPOCH - $(date +%s)) / 86400 ))
-        echo "  Certificate expires in $DAYS_LEFT days ($EXPIRY)"
-        if [ "$DAYS_LEFT" -lt 7 ]; then
-          echo "FAIL: Certificate expires in $DAYS_LEFT days — renew immediately"
-          exit 1
-        fi
-        echo "PASS: :443 TLS certificate valid ($DAYS_LEFT days remaining)"
-
-        echo "==> [1b] TLS handshake on ${DOMAIN}:9093 (Kafka) ..."
-        if ! echo | openssl s_client -connect "${DOMAIN}:9093" -servername "$DOMAIN" 2>/dev/null \
-            | grep -q "Verify return code: 0 (ok)"; then
-          echo "FAIL: TLS certificate verification failed on :9093"
-          exit 1
-        fi
-        echo "PASS: :9093 TLS handshake successful"
-
-    # ---------------------------------------------------------------
-    # Check 2 + 3 — Auth + Produce/Consume via scripts/kafka-check.sh
-    # Uses official confluentinc/cp-kafka image.
-    # Only input: client.properties
-    # Run locally: ./scripts/kafka-check.sh --props-file client.properties
-    # ---------------------------------------------------------------
-    - name: 'Check 2 + 3 — Auth + Produce/Consume (confluentinc/cp-kafka)'
-      id: check23
-      run: |
-        set -euo pipefail
-        chmod +x scripts/kafka-check.sh
-        scripts/kafka-check.sh --props-file "${{ steps.creds.outputs.props_file }}"
-
-    # ---------------------------------------------------------------
-    # Summary
-    # ---------------------------------------------------------------
-    - name: Summary
-      if: always()
-      run: |
-        printf '%s\n' "### Kafka Tests Results" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| # | Check | Target |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "|---|---|---|" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 1 | Connectivity + SSL | \`:443\` TLS cert + \`:9093\` TLS handshake |" >> $GITHUB_STEP_SUMMARY
-        printf '%s\n' "| 2+3 | Auth + Produce/Consume | \`scripts/kafka-check.sh\` via \`confluentinc/cp-kafka\` |" >> $GITHUB_STEP_SUMMARY
+    - name: Run Kafka E2E Test
+      timeout-minutes: 35
+      run: terraform test -filter=tests/e2e.tftest.hcl -no-color
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        ARM_USE_OIDC: true
