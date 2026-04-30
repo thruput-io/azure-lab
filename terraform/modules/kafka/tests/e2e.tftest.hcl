@@ -52,6 +52,9 @@ run "deploy_kafka" {
     schema_registry_url = var.schema_registry_url
     consumer_group_id   = "grayskull-consumer-group"
     key_vault_id        = run.setup.key_vault_id
+    appgw_subnet_id     = run.setup.appgw_subnet_id
+    appgw_identity_id   = run.setup.appgw_identity_id
+    kv_cert_secret_id   = run.setup.kv_cert_secret_id
     topics = {
       e2e = {
         name              = "internal.test.test-event.event.v1"

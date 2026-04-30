@@ -30,6 +30,19 @@ resource "azurerm_subnet" "pe" {
   address_prefixes     = ["10.10.1.0/24"]
 }
 
+resource "azurerm_subnet" "appgw" {
+  name                 = "snet-appgw"
+  resource_group_name  = azurerm_resource_group.test.name
+  virtual_network_name = azurerm_virtual_network.test.name
+  address_prefixes     = ["10.10.2.0/24"]
+}
+
+resource "azurerm_user_assigned_identity" "appgw" {
+  name                = "id-appgw-inttest-${random_id.suffix.hex}"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.test.name
+}
+
 output "namespace_name" {
   value = "evh-inttest-${random_id.suffix.hex}"
 }
@@ -83,6 +96,52 @@ resource "azurerm_role_assignment" "kv_secrets_officer" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
+resource "azurerm_role_assignment" "kv_cert_officer" {
+  scope                = azurerm_key_vault.test.id
+  role_definition_name = "Key Vault Certificates Officer"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+resource "azurerm_key_vault_certificate" "appgw_tls" {
+  name         = "appgw-tls-inttest"
+  key_vault_id = azurerm_key_vault.test.id
+
+  certificate_policy {
+    issuer_parameters { name = "Self" }
+    key_properties {
+      exportable = true
+      key_size   = 2048
+      key_type   = "RSA"
+      reuse_key  = true
+    }
+    lifetime_action {
+      action { action_type = "AutoRenew" }
+      trigger { days_before_expiry = 30 }
+    }
+    secret_properties { content_type = "application/x-pkcs12" }
+    x509_certificate_properties {
+      extended_key_usage = ["1.3.6.1.5.5.7.3.1"]
+      key_usage          = ["digitalSignature", "keyEncipherment"]
+      subject            = "CN=inttest.local"
+      validity_in_months = 12
+    }
+  }
+
+  depends_on = [azurerm_role_assignment.kv_cert_officer]
+}
+
 output "key_vault_id" {
   value = azurerm_key_vault.test.id
+}
+
+output "appgw_subnet_id" {
+  value = azurerm_subnet.appgw.id
+}
+
+output "appgw_identity_id" {
+  value = azurerm_user_assigned_identity.appgw.id
+}
+
+output "kv_cert_secret_id" {
+  value = azurerm_key_vault_certificate.appgw_tls.secret_id
 }
